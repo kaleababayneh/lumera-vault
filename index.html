@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lumera Vault — Notarize once, prove forever</title>
+  <meta name="description" content="ZK-verified document vault. Encrypt your credentials on Lumera Cascade and prove selective claims via Midnight ZK proofs — without ever revealing the underlying document." />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link rel="icon" type="image/svg+xml" href="/vault-icon.svg" />
+  <script type="module" src="/src/main.ts"></script>
+</head>
+
+<body>
+<div class="app">
+
+  <!-- ─── Header ─────────────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-brand">
+      <div class="brand-logo">🔐</div>
+      <div>
+        <h1>Lumera Vault</h1>
+        <p>Notarize once, prove forever</p>
+      </div>
+    </div>
+    <div class="header-badges">
+      <span class="tech-badge midnight">🌙 Midnight ZK</span>
+      <span class="tech-badge cascade">⛓ Cascade Storage</span>
+    </div>
+  </header>
+
+  <!-- ─── Wallet section ─────────────────────────────────────────────────── -->
+  <section class="wallet-section">
+    <button id="wallet-button" class="btn-primary">Connect Keplr</button>
+    <span id="wallet-status"></span>
+    <div id="dust-balance" class="dust-balance hidden">
+      <span class="dust-icon">🌙</span>
+      <strong id="dust-amount">1000</strong>
+      <span>DUST</span>
+    </div>
+  </section>
+
+  <!-- ─── Status ─────────────────────────────────────────────────────────── -->
+  <div id="status-message" class="status-message hidden"></div>
+
+  <!-- ─── Tab nav ────────────────────────────────────────────────────────── -->
+  <nav class="tab-nav disabled" id="tab-nav">
+    <button class="tab-button active" data-tab="vault">🗄️ My Vault</button>
+    <button class="tab-button" data-tab="prove">🔐 Generate Proof</button>
+    <button class="tab-button" data-tab="verify">✅ Verify</button>
+    <button class="tab-button" data-tab="history">📋 History</button>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       VAULT TAB
+       ══════════════════════════════════════════════════════════════════════ -->
+  <section id="tab-vault" class="tab-content active">
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h2>🗄️ My Vault</h2>
+          <p class="section-description">Documents are encrypted end-to-end and stored permanently on Cascade.</p>
+        </div>
+        <button id="open-upload-modal" class="btn-primary" disabled>+ Upload Document</button>
+      </div>
+      <div id="vault-documents-container">
+        <div class="empty-state">
+          <div class="empty-icon">🔒</div>
+          <p>Your vault is empty.</p>
+          <p class="empty-sub">Connect your wallet and upload a document to get started.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       PROVE TAB
+       ══════════════════════════════════════════════════════════════════════ -->
+  <section id="tab-prove" class="tab-content">
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h2>🔐 Generate ZK Proof</h2>
+          <p class="section-description">Prove a claim about your document without revealing it.</p>
+        </div>
+      </div>
+
+      <!-- Step 1: Select document -->
+      <div id="prove-step-1">
+        <div class="prove-step-header">Step 1 — Select Document from Vault</div>
+        <div id="prove-documents-container"></div>
+      </div>
+
+      <!-- Step 2: Select claim -->
+      <div id="prove-step-2" class="hidden">
+        <div class="prove-breadcrumb">
+          <span>Document:</span>
+          <span id="prove-selected-doc" class="crumb-value"></span>
+        </div>
+        <div class="prove-step-header">Step 2 — Choose Claim to Prove</div>
+        <div id="prove-claims-container"></div>
+        <button class="btn-ghost prove-step-back" data-to="1">← Back</button>
+      </div>
+
+      <!-- Step 3: Configure parameters -->
+      <div id="prove-step-3" class="hidden">
+        <div class="prove-breadcrumb">
+          <span>Document:</span>
+          <span id="prove-selected-doc-3" class="crumb-value"></span>
+          <span class="crumb-sep">›</span>
+          <span id="prove-selected-claim" class="crumb-value"></span>
+        </div>
+        <div class="prove-step-header">Step 3 — Configure Claim Parameters</div>
+        <div id="prove-params-form"></div>
+        <div style="display:flex; gap:0.75rem; margin-top:1rem;">
+          <button class="btn-ghost prove-step-back" data-to="2">← Back</button>
+          <button id="generate-proof-button" class="btn-primary">⚡ Generate ZK Proof</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Result -->
+      <div id="prove-step-4" class="hidden">
+        <div id="prove-result-container"></div>
+        <div style="margin-top:1rem;">
+          <button class="btn-ghost prove-step-back" data-to="1">← Generate Another</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       VERIFY TAB
+       ══════════════════════════════════════════════════════════════════════ -->
+  <section id="tab-verify" class="tab-content">
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h2>✅ Verify a Proof</h2>
+          <p class="section-description">Paste a proof link or encoded proof — no wallet required.</p>
+        </div>
+      </div>
+      <div class="verify-form">
+        <textarea id="verify-input" placeholder="Paste the proof link (e.g. http://…#verify/eyJ…) or the raw encoded proof string"></textarea>
+        <button id="verify-button" class="btn-primary" style="align-self:flex-start">🔍 Verify Proof</button>
+      </div>
+      <div id="verify-result" class="hidden"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       HISTORY TAB
+       ══════════════════════════════════════════════════════════════════════ -->
+  <section id="tab-history" class="tab-content">
+    <div class="section">
+      <div class="section-header">
+        <h2>📋 Proof History</h2>
+      </div>
+      <div id="proof-history-container">
+        <div class="empty-state">
+          <div class="empty-icon">📋</div>
+          <p>No proofs generated yet.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div><!-- /.app -->
+
+<!-- ─── Upload Modal Overlay ────────────────────────────────────────────── -->
+<div id="upload-overlay" class="modal-overlay hidden"></div>
+
+<!-- ─── Upload Modal ────────────────────────────────────────────────────── -->
+<div id="upload-modal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Upload Document</h3>
+      <button id="close-upload-modal" class="btn-close" aria-label="Close">✕</button>
+    </div>
+
+    <!-- Step 1: Schema selection -->
+    <div id="upload-step-1">
+      <div class="upload-step-header">Select Document Type</div>
+      <div id="schema-grid" class="schema-grid"></div>
+    </div>
+
+    <!-- Step 2: Fields form -->
+    <div id="upload-step-2" class="hidden">
+      <div class="upload-step-header">
+        <span id="upload-step2-schema-label"></span>
+      </div>
+      <div id="document-fields-form"></div>
+    </div>
+
+    <!-- Step 3: Progress -->
+    <div id="upload-step-3" class="hidden">
+      <div class="upload-step-header">Encrypting & Uploading…</div>
+      <div class="progress-bar"><div id="upload-progress-fill" class="progress-fill" style="width:0%"></div></div>
+      <p id="upload-progress-text" class="progress-label">Initializing…</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
