@@ -19,7 +19,7 @@ import {
     ledger,
     type AcademicCert,
     type Ledger,
-} from '../../managed/contract/index.js';
+} from '../managed/contract/index.js';
 import {
     witnesses,
     createCertificatePrivateState,

@@ -6,12 +6,17 @@
  * holds its commitment + Cascade pointer and verifies ZK claims about it.
  */
 
+import './globals';
 import './css/style.css';
+import { setNetworkId, type NetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import { MIDNIGHT_NETWORK_ID } from './config';
 import { initUI, showStatus } from './ui';
 import { parseUrlFragment } from './links';
 
+setNetworkId(MIDNIGHT_NETWORK_ID as NetworkId);
+
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🎓 Lumera Vault initializing…');
+    console.log(`🎓 Lumera Vault initializing… (Midnight ${MIDNIGHT_NETWORK_ID})`);
 
     // Capture share links (#cert/… or #verify/…) before the hash is cleared.
     const fragment = parseUrlFragment();

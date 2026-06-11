@@ -9,11 +9,12 @@
  */
 
 import {
-    connect1amWallet,
-    disconnect1amWallet,
-    restore1amSession,
+    connectWallet,
+    disconnectWallet,
+    restoreWalletSession,
     isWalletConnected,
     getConnectedApi,
+    getWalletName,
     getShieldedAddress,
     formatAddress,
 } from './midnight/wallet';
@@ -135,7 +136,7 @@ export async function initUI(): Promise<void> {
     }
 
     // Silent wallet session restore (only re-connects if previously connected).
-    restore1amSession()
+    restoreWalletSession()
         .then(api => {
             if (api) return afterWalletConnected();
         })
@@ -175,7 +176,7 @@ async function handleIncomingFragment(frag: ParsedFragment): Promise<void> {
 
 async function handleWalletClick(): Promise<void> {
     if (isWalletConnected()) {
-        disconnect1amWallet();
+        disconnectWallet();
         providers = null;
         registry = null;
         updateWalletUI();
@@ -188,9 +189,9 @@ async function handleWalletClick(): Promise<void> {
     btn.textContent = 'Connecting…';
 
     try {
-        await connect1amWallet();
+        await connectWallet();
         await afterWalletConnected();
-        showStatus(`Connected to 1AM on Midnight ${MIDNIGHT_NETWORK_ID} — fees sponsored by ProofStation ⚡`, 'success');
+        showStatus(`Connected to ${getWalletName() ?? 'wallet'} on Midnight ${MIDNIGHT_NETWORK_ID} — fees sponsored ⚡`, 'success');
     } catch (err) {
         btn.disabled = false;
         btn.textContent = 'Connect 1AM Wallet';
@@ -214,7 +215,7 @@ function updateWalletUI(): void {
         btn.textContent = 'Disconnect';
         btn.className = 'btn-disconnect';
         btn.disabled = false;
-        status.textContent = formatAddress(addr);
+        status.textContent = `${getWalletName() ?? 'wallet'} · ${formatAddress(addr)}`;
         status.className = 'wallet-address';
         q('#gasless-badge').classList.remove('hidden');
     } else {

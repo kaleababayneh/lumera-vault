@@ -11,7 +11,7 @@ import type {
     AcademicCert,
     Ledger,
     Witnesses,
-} from '../managed/contract/index.js';
+} from './managed/contract/index.js';
 
 export interface CertificatePrivateState {
     readonly currentCert: AcademicCert;

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { setNetworkId, type NetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import { pureCircuits, type AcademicCert } from '../../managed/contract/index.js';
+import { pureCircuits, type AcademicCert } from '../managed/contract/index.js';
 import { CertificateSimulator } from './certificate-simulator.js';
 
 setNetworkId('undeployed' as NetworkId);

@@ -45,7 +45,7 @@ circuit, so `claimProofs.member(proofKey)` *is* the verification. The proof key 
 reproducible by anyone (`computeProofKey` is an exported pure circuit), which is what
 makes wallet-less verification possible.
 
-### The contract (`contract/certificate.compact`)
+### The contract (`contract/src/certificate.compact`)
 
 | Circuit | Caller | Purpose |
 |---|---|---|
@@ -73,15 +73,34 @@ putting any PII on-chain.
 - [1AM wallet](https://1am.xyz/install-beta) browser extension, set to **preprod**
 - A cascade-api key (see [api.lumera.help docs](https://github.com/kaleababayneh/cascade-api))
 
+### Project layout (npm workspaces)
+
+```
+contract/            # @lumera-vault/contract
+  src/certificate.compact   # the Compact contract
+  src/witnesses.ts          # witness implementations
+  src/managed/              # compact compiler output (generated)
+  src/test/                 # vitest circuit simulator tests
+  dist/                     # built package (generated)
+ui/                  # @lumera-vault/ui — Vite app, depends on the contract pkg
+  src/                      # app + midnight/cascade integration
+  public/keys|zkir          # ZK assets copied from contract (generated)
+```
+
 ### Setup
 
 ```bash
-cp .env.example .env        # fill VITE_CASCADE_API_KEY (and VITE_CONTRACT_ADDRESS once deployed)
+cp ui/.env.example ui/.env  # fill VITE_CASCADE_API_KEY (and VITE_CONTRACT_ADDRESS once deployed)
 npm install
-npm run contract:compile    # compact compile + copy keys/zkir → public/
+npm run build:contract      # compact compile (ZK keygen, ~1 min) + contract package build
+npm run build:start         # frontend build + serve → http://localhost:8081
 npm run test                # contract simulator tests (no network needed)
-npm run dev                 # http://localhost:5173
 ```
+
+Day-to-day: after frontend changes just re-run `npm run build:start` — it does
+NOT recompile the contract. Re-run `npm run build:contract` only when a
+`.compact` file or the witnesses change. (`npm run build` = both in sequence;
+`npm run start` serves the existing `ui/dist` without rebuilding.)
 
 ### First run (one-time)
 
@@ -121,8 +140,12 @@ npm run dev                 # http://localhost:5173
 - Storage via **cascade-api**'s public instance at `https://api.lumera.help`
   (`VITE_CASCADE_API_BASE` to self-host). API keys are quota-capped bearer tokens; a
   browser-exposed key is the documented pattern for demos — rotate if abused.
-- `npm run contract:compile` regenerates `contract/managed/` + `public/keys|zkir`
-  after any `.compact` change (compact compiler ≥ 0.31, language ≥ 0.20).
+- After any `.compact` or witness change run `npm run build:contract`
+  (regenerates `contract/src/managed/` + `contract/dist/`); the next
+  `npm run build:start` re-copies `ui/public/keys|zkir` automatically
+  (compact compiler ≥ 0.31, language ≥ 0.20).
+- Wallet detection enumerates every `window.midnight` connector with API v4
+  (1AM preferred, Lace works too) — pattern borrowed from the kaamos htlc-ui.
 
 ## License
 

@@ -9,7 +9,7 @@ import type {
     CertificatePrivateState,
     Contract,
     Witnesses,
-} from '../../contract/src/index';
+} from '@lumera-vault/contract';
 
 export const certPrivateStateKey = 'LumeraVaultCertificateState';
 export type CertPrivateStateId = typeof certPrivateStateKey;

@@ -1,0 +1,41 @@
+{
+  "name": "@lumera-vault/ui",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "copy-zk-assets": "rm -rf ./public/keys ./public/zkir && cp -R ../contract/src/managed/keys ./public/keys && cp -R ../contract/src/managed/zkir ./public/zkir",
+    "prebuild": "npm run copy-zk-assets",
+    "build": "rm -rf ./dist && tsc -p tsconfig.json --noEmit && vite build",
+    "start": "http-server -c-1 --port 8081 --proxy http://localhost:8081? ./dist",
+    "build:start": "npm run build && npm run start",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@lumera-vault/contract": "*",
+    "@midnight-ntwrk/compact-js": "^2.5.0",
+    "@midnight-ntwrk/compact-runtime": "^0.16.0",
+    "@midnight-ntwrk/dapp-connector-api": "^4.0.1",
+    "@midnight-ntwrk/ledger-v8": "^8.1.0",
+    "@midnight-ntwrk/midnight-js-contracts": "^4.0.4",
+    "@midnight-ntwrk/midnight-js-fetch-zk-config-provider": "^4.0.4",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "^4.0.4",
+    "@midnight-ntwrk/midnight-js-network-id": "^4.0.4",
+    "@midnight-ntwrk/midnight-js-types": "^4.0.4",
+    "@midnight-ntwrk/midnight-js-utils": "^4.0.4",
+    "buffer": "^6.0.3",
+    "libsodium-wrappers-sumo": "^0.7.15",
+    "node-stdlib-browser": "^1.3.1",
+    "process": "^0.11.10"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers-sumo": "^0.7.8",
+    "@types/node": "^24.12.2",
+    "http-server": "^14.1.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.1",
+    "vite-plugin-node-polyfills": "^0.25.0",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.5.0"
+  }
+}

@@ -3,37 +3,16 @@
   "private": true,
   "version": "2.0.0",
   "type": "module",
+  "workspaces": [
+    "contract",
+    "ui"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "contract:compile": "compact compile contract/certificate.compact contract/managed && npm run contract:copy-assets",
-    "contract:copy-assets": "mkdir -p public && rm -rf public/keys public/zkir && cp -r contract/managed/keys public/ && cp -r contract/managed/zkir public/",
-    "test": "vitest run",
-    "test:watch": "vitest"
-  },
-  "dependencies": {
-    "@midnight-ntwrk/compact-runtime": "^0.16.0",
-    "@midnight-ntwrk/dapp-connector-api": "^4.0.1",
-    "@midnight-ntwrk/midnight-js": "^4.0.4",
-    "@midnight-ntwrk/midnight-js-fetch-zk-config-provider": "^4.0.4",
-    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "^4.0.4",
-    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "^4.0.4",
-    "buffer": "^6.0.3",
-    "libsodium-wrappers-sumo": "^0.7.15",
-    "node-stdlib-browser": "^1.3.1",
-    "process": "^0.11.10",
-    "vite-plugin-top-level-await": "^1.6.0",
-    "vite-plugin-wasm": "^3.6.0"
-  },
-  "devDependencies": {
-    "@rolldown/plugin-node-polyfills": "^1.0.3",
-    "@types/libsodium-wrappers-sumo": "^0.7.8",
-    "@types/node": "^24.12.2",
-    "esbuild": "^0.28.0",
-    "rollup": "^4.61.1",
-    "typescript": "~5.9.3",
-    "vite": "^8.0.8",
-    "vitest": "^4.1.4"
+    "build:contract": "npm run compact --workspace contract && npm run build --workspace contract",
+    "build:start": "npm run build --workspace ui && npm run start --workspace ui",
+    "build": "npm run build:contract && npm run build --workspace ui",
+    "start": "npm run start --workspace ui",
+    "test": "npm run test --workspace contract",
+    "typecheck": "npm run typecheck --workspace contract && npm run typecheck --workspace ui"
   }
 }

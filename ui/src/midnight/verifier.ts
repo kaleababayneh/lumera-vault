@@ -11,13 +11,12 @@
  */
 
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
-import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import {
     ledger,
     type ClaimRecord,
     type Ledger,
-} from '../../contract/src/index';
-import { INDEXER_URI, INDEXER_WS_URI, MIDNIGHT_NETWORK_ID } from '../config';
+} from '@lumera-vault/contract';
+import { INDEXER_URI, INDEXER_WS_URI } from '../config';
 import { b64uToBytes, type VerifyLinkPayload } from '../links';
 import { prepareClaim, proofKeyOf, studentIdHashOf } from './encoding';
 
@@ -25,7 +24,7 @@ let _pdp: ReturnType<typeof indexerPublicDataProvider> | null = null;
 
 function publicDataProvider() {
     if (!_pdp) {
-        setNetworkId(MIDNIGHT_NETWORK_ID);
+        // setNetworkId() runs at app boot (main.ts) before anything calls this.
         _pdp = indexerPublicDataProvider(INDEXER_URI, INDEXER_WS_URI);
     }
     return _pdp;

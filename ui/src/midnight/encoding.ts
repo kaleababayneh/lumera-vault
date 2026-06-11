@@ -10,7 +10,7 @@
  */
 
 import { blake2b256str, randomSalt, toHex } from '../crypto';
-import { pureCircuits, type AcademicCert } from '../../contract/src/index';
+import { pureCircuits, type AcademicCert } from '@lumera-vault/contract';
 import { DEGREE_LEVELS, type DegreeLevel } from '../config';
 
 // ── Certificate fields (plaintext, as entered by the school) ────────────────

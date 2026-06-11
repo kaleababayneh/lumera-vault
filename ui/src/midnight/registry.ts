@@ -14,7 +14,7 @@ import type { ContractAddress } from '@midnight-ntwrk/compact-runtime';
 import {
     createCertificatePrivateState,
     type AcademicCert,
-} from '../../contract/src/index';
+} from '@lumera-vault/contract';
 import { CompiledCertificateContract } from './contract';
 import {
     certPrivateStateKey,

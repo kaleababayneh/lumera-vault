@@ -12,7 +12,7 @@ import {
     witnesses,
     type CertificatePrivateState,
     type Witnesses,
-} from '../../contract/src/index';
+} from '@lumera-vault/contract';
 import type { CertContract } from './common-types';
 
 export const CompiledCertificateContract = CompiledContract.make<CertContract>(

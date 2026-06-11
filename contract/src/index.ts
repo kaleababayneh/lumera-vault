@@ -7,5 +7,5 @@
  * (vitest simulator tests).
  */
 
-export * from '../managed/contract/index.js';
+export * from './managed/contract/index.js';
 export * from './witnesses.js';
