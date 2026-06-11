@@ -10,17 +10,14 @@
 
 export type SchemaType =
     | 'academic_credential'
-    | 'income_statement'
-    | 'medical_record'
-    | 'property_deed'
-    | 'identity_document';
+    // | 'income_statement'
+    // | 'medical_record'
+    // | 'property_deed'
+    // | 'identity_document'
+    ;
 
 export const SCHEMA_TYPES: SchemaType[] = [
     'academic_credential',
-    'income_statement',
-    'medical_record',
-    'property_deed',
-    'identity_document',
 ];
 
 // ── Field definitions ───────────────────────────────────────────────────────
