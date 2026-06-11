@@ -15,7 +15,7 @@ import {
     createCertificatePrivateState,
     type AcademicCert,
 } from '@lumera-vault/contract';
-import { CompiledCertificateContract } from './contract';
+import { getCompiledCertificateContract } from './contract';
 import {
     certPrivateStateKey,
     type CertProviders,
@@ -37,7 +37,7 @@ export class CertificateRegistry {
     /** Deploy a fresh registry; the deployer wallet becomes the first issuer. */
     static async deploy(providers: CertProviders): Promise<CertificateRegistry> {
         const deployed = await deployContract(providers, {
-            compiledContract: CompiledCertificateContract,
+            compiledContract: getCompiledCertificateContract(),
             privateStateId: certPrivateStateKey,
             initialPrivateState: createCertificatePrivateState(),
         });
@@ -52,7 +52,7 @@ export class CertificateRegistry {
         providers.privateStateProvider.setContractAddress?.(contractAddress);
         const deployed = await findDeployedContract(providers, {
             contractAddress,
-            compiledContract: CompiledCertificateContract,
+            compiledContract: getCompiledCertificateContract(),
             privateStateId: certPrivateStateKey,
             initialPrivateState: createCertificatePrivateState(),
         });

@@ -89,8 +89,9 @@ function setContractAddress(address: string): void {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 export async function initUI(): Promise<void> {
-    await initCrypto();
-
+    // NOTE: no awaits before the event listeners are wired — if any async init
+    // hangs or fails, the buttons must still respond. Crypto (libsodium) is
+    // initialized lazily inside the flows that actually hash/encrypt.
     q<HTMLButtonElement>('#wallet-button').addEventListener('click', handleWalletClick);
 
     qa('.tab-button').forEach(btn => {
@@ -130,6 +131,9 @@ export async function initUI(): Promise<void> {
     q('#deploy-registry-button').addEventListener('click', () => void handleDeployRegistry());
 
     renderAll();
+
+    // All listeners wired and first paint done — the boot watchdog stands down.
+    (window as unknown as { __LV_READY?: boolean }).__LV_READY = true;
 
     if (!isCascadeConfigured()) {
         showStatus('⚠️ VITE_CASCADE_API_KEY is not set — Cascade uploads will fail. See .env.example.', 'warning', 10000);
@@ -352,6 +356,8 @@ async function handleIssueCertificate(): Promise<void> {
     q('#issue-progress-panel').classList.remove('hidden');
 
     try {
+        await initCrypto();
+
         // The registry must be reachable before we inscribe anything permanent.
         progress(2, 'Joining registry contract…');
         const reg = await ensureRegistry();
@@ -527,6 +533,7 @@ async function runImport(payload: CertShareLinkPayload): Promise<void> {
         q('#import-progress-text').textContent = label;
     };
     try {
+        await initCrypto();
         const cert = await importCertificateFromLink(payload, progress);
         progressEl.classList.add('hidden');
         q<HTMLTextAreaElement>('#import-input').value = '';
@@ -709,6 +716,7 @@ async function handleGenerateProof(): Promise<void> {
     if (!proveCertActionId || !proveClaimKey) return;
     const studentCert = getStudentCert(proveCertActionId);
     if (!studentCert) { showStatus('Certificate not found in vault.', 'error'); return; }
+    await initCrypto();
 
     let claimParams: Record<string, string | number>;
     try {
@@ -866,6 +874,7 @@ async function runVerify(payload: VerifyLinkPayload): Promise<void> {
             <p class="proof-gen-label">Querying the Midnight indexer…</p>
         </div>`;
     try {
+        await initCrypto();
         const result = await verifyClaimOnChain(payload);
         renderVerifyResult(result, payload);
     } catch (err) {

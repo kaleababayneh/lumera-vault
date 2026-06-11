@@ -12,6 +12,30 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <link rel="icon" type="image/svg+xml" href="/vault-icon.svg" />
+  <script>
+    // Boot watchdog — runs before the bundle. Surfaces module-eval crashes
+    // and load stalls that would otherwise only appear in the console.
+    window.__lvBootError = function (msg) {
+      document.title = 'ERR ' + String(msg).slice(0, 140);
+      var el = document.getElementById('status-message');
+      if (el) {
+        el.textContent = '⚠️ ' + msg + ' — open the browser console (⌥⌘J) for details.';
+        el.className = 'status-message status-error';
+      }
+      console.error('[boot]', msg);
+    };
+    window.addEventListener('error', function (e) {
+      if (e && e.message) window.__lvBootError('Boot error: ' + e.message);
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      window.__lvBootError('Boot rejection: ' + String(e.reason));
+    });
+    setTimeout(function () {
+      if (!window.__LV_READY) {
+        window.__lvBootError('App did not finish initializing within 12s — the bundle stalled (likely WASM / top-level await).');
+      }
+    }, 12000);
+  </script>
   <script type="module" src="/src/main.ts"></script>
 </head>
 

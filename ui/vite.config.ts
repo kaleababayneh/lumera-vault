@@ -6,7 +6,6 @@
 import { defineConfig } from 'vite';
 import path from 'path';
 import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 export default defineConfig({
@@ -14,14 +13,6 @@ export default defineConfig({
     build: {
         target: 'esnext',
         minify: false,
-        rollupOptions: {
-            output: {
-                manualChunks: {
-                    // Separate chunk for WASM modules to avoid top-level await issues
-                    wasm: ['@midnight-ntwrk/onchain-runtime-v3'],
-                },
-            },
-        },
         commonjsOptions: {
             transformMixedEsModules: true,
             extensions: ['.js', '.cjs'],
@@ -35,10 +26,8 @@ export default defineConfig({
             protocolImports: true,
         }),
         wasm(),
-        topLevelAwait({
-            promiseExportName: '__tla',
-            promiseImportName: (i) => `__tla_${i}`,
-        }),
+        // NOTE: no vite-plugin-top-level-await — build target is esnext, so
+        // native TLA is emitted; the plugin's wrapper can deadlock the bundle.
         {
             // Force the wasm-backed runtime through the normal module graph
             // when imported from compact-runtime.
