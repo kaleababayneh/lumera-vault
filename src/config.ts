@@ -1,61 +1,35 @@
 /**
- * Lumera Vault — Chain & App Configuration
+ * Lumera Vault — App Configuration
+ *
+ * Storage: Lumera Cascade via the cascade-api HTTP service (no Lumera wallet
+ * needed — the backend signs and pays in ulume).
+ * Proofs:  Midnight preprod via the 1AM wallet (fees sponsored by ProofStation).
  */
 
-// ── Lumera Testnet ──────────────────────────────────────────────────────────
-export const CHAIN_ID   = 'lumera-testnet-2';
-export const CHAIN_NAME = 'Lumera Testnet';
-export const RPC_ENDPOINT = 'https://rpc.testnet.lumera.io';
-export const LCD_ENDPOINT = 'https://lcd.testnet.lumera.io';
+const env = import.meta.env as Record<string, string | undefined>;
 
-// Token
-export const DENOM         = 'ulume';
-export const DISPLAY_DENOM = 'LUME';
-export const DECIMALS      = 6;
-export const GAS_PRICE     = '0.025ulume';
+// ── Lumera Cascade (via cascade-api) ─────────────────────────────────────────
+export const CASCADE_API_BASE = env.VITE_CASCADE_API_BASE ?? 'https://api.lumera.help';
+export const CASCADE_API_KEY  = env.VITE_CASCADE_API_KEY ?? '';
+/** Upload latency is 30–60s (Cascade tx + SuperNode replication). */
+export const CASCADE_UPLOAD_TIMEOUT_MS  = 180_000;
+export const CASCADE_DOWNLOAD_TIMEOUT_MS = 120_000;
 
-// Lumescope
-export const LUMESCOPE_API_BASE = import.meta.env.VITE_LUMESCOPE_API_BASE as string | undefined;
-export const LUMESCOPE_LIMIT    = 500;
+// ── Midnight ─────────────────────────────────────────────────────────────────
+export const MIDNIGHT_NETWORK_ID = env.VITE_MIDNIGHT_NETWORK_ID ?? 'preprod';
+/** Used by the wallet-less verifier tab; the wallet's getConfiguration() wins otherwise. */
+export const INDEXER_URI    = env.VITE_INDEXER_URI    ?? 'https://indexer.preprod.midnight.network/api/v1/graphql';
+export const INDEXER_WS_URI = env.VITE_INDEXER_WS_URI ?? 'wss://indexer.preprod.midnight.network/api/v1/graphql/ws';
+/** Default registry contract address (can be overridden in the Registry tab). */
+export const DEFAULT_CONTRACT_ADDRESS = env.VITE_CONTRACT_ADDRESS ?? '';
 
-// ── Midnight simulation ─────────────────────────────────────────────────────
-/** Prefix used on simulated Midnight contract addresses */
-export const MIDNIGHT_CONTRACT_PREFIX = 'mid1vault';
-/** Simulated DUST balance for demo purposes */
-export const INITIAL_DUST_BALANCE = 1_000;
-/** Cost in DUST per proof generation */
-export const DUST_PER_PROOF = 1;
-/** Midnight network version tag embedded in proof objects */
-export const MIDNIGHT_NETWORK_VERSION = 'midnight-testnet-sim-v1';
+// ── Degree levels (order defines the on-chain Uint<8> encoding) ─────────────
+export const DEGREE_LEVELS = ['Certificate', 'Associate', 'Bachelor', 'Master', 'PhD'] as const;
+export type DegreeLevel = (typeof DEGREE_LEVELS)[number];
 
-// ── Vault local storage keys ────────────────────────────────────────────────
-export const VAULT_INDEX_KEY_PREFIX = 'lumera_vault_index_';
-export const PROOFS_KEY_PREFIX      = 'lumera_vault_proofs_';
-export const DUST_BALANCE_KEY       = 'lumera_vault_dust_balance';
-export const SESSION_WALLET_KEY     = 'lumera_vault_wallet_session';
-
-// ── Keplr chain info ────────────────────────────────────────────────────────
-export const LUMERA_CHAIN_INFO = {
-    chainId: CHAIN_ID,
-    chainName: CHAIN_NAME,
-    rpc: RPC_ENDPOINT,
-    rest: LCD_ENDPOINT,
-    bip44: { coinType: 118 },
-    bech32Config: {
-        bech32PrefixAccAddr:    'lumera',
-        bech32PrefixAccPub:     'lumerapub',
-        bech32PrefixValAddr:    'lumeravaloper',
-        bech32PrefixValPub:     'lumeravaloperpub',
-        bech32PrefixConsAddr:   'lumeravalcons',
-        bech32PrefixConsPub:    'lumeravalconspub',
-    },
-    currencies: [{ coinDenom: DISPLAY_DENOM, coinMinimalDenom: DENOM, coinDecimals: DECIMALS }],
-    feeCurrencies: [{
-        coinDenom: DISPLAY_DENOM,
-        coinMinimalDenom: DENOM,
-        coinDecimals: DECIMALS,
-        gasPriceStep: { low: 0.01, average: 0.025, high: 0.04 },
-    }],
-    stakeCurrency: { coinDenom: DISPLAY_DENOM, coinMinimalDenom: DENOM, coinDecimals: DECIMALS },
-    features: ['stargate', 'ibc-transfer'],
-};
+// ── localStorage / sessionStorage keys ──────────────────────────────────────
+export const CONTRACT_ADDRESS_KEY = 'lumera_vault_contract_address_v2';
+export const ISSUED_INDEX_KEY     = 'lumera_vault_issued_certs_v2';
+export const STUDENT_VAULT_KEY    = 'lumera_vault_student_certs_v2';
+export const PROOF_HISTORY_KEY    = 'lumera_vault_proof_history_v2';
+export const SESSION_WALLET_KEY   = 'lumera_vault_wallet_session_v2';

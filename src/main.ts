@@ -1,19 +1,23 @@
 /**
  * Lumera Vault — Entry Point
- * "Notarize once, prove forever"
+ * "Issue once, prove forever"
+ *
+ * Cascade (Lumera) stores the encrypted certificate; Midnight (preprod)
+ * holds its commitment + Cascade pointer and verifies ZK claims about it.
  */
 
 import './css/style.css';
 import { initUI, showStatus } from './ui';
-import { parseProofFromUrl } from './midnight';
+import { parseUrlFragment } from './links';
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🔐 Lumera Vault initializing…');
+    console.log('🎓 Lumera Vault initializing…');
 
-    // If there is a verify link in the URL, store it before the hash gets cleared
-    const pendingProof = parseProofFromUrl();
-    if (pendingProof) {
-        sessionStorage.setItem('lv_pending_verify', JSON.stringify(pendingProof));
+    // Capture share links (#cert/… or #verify/…) before the hash is cleared.
+    const fragment = parseUrlFragment();
+    if (fragment) {
+        sessionStorage.setItem('lv_pending_fragment', JSON.stringify(fragment));
+        window.history.replaceState({}, document.title, window.location.pathname);
     }
 
     try {

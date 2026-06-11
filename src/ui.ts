@@ -1,128 +1,173 @@
 /**
  * UI Module — Lumera Vault
  *
- * Manages all DOM interactions across four tabs:
- *   Vault | Generate Proof | Verify | History
+ * Tabs: Issue (school) | My Certificates (student) | Prove (student)
+ *       | Verify (anyone, wallet-less) | History
+ *
+ * Storage: Lumera Cascade via cascade-api (no Lumera wallet needed).
+ * Chain:   Midnight preprod via the 1AM wallet (fees sponsored — gasless).
  */
 
 import {
-    connectWallet,
-    disconnectWallet,
-    getConnectedAddress,
+    connect1amWallet,
+    disconnect1amWallet,
+    restore1amSession,
     isWalletConnected,
-    isKeplrInstalled,
+    getConnectedApi,
+    getShieldedAddress,
     formatAddress,
-    initializeWalletState,
-} from './wallet';
+} from './midnight/wallet';
+import { buildProviders } from './midnight/providers';
+import { CertificateRegistry } from './midnight/registry';
+import type { CertProviders } from './midnight/common-types';
 import {
-    initializeCascadeClient,
-} from './cascade';
-import { initCrypto } from './crypto';
+    encodeCertificate,
+    commitmentOf,
+    newSalts,
+    prepareClaim,
+    satisfiesClaim,
+    type CertificateFields,
+    type ClaimKey,
+} from './midnight/encoding';
+import { verifyClaimOnChain, type OnChainVerificationResult } from './midnight/verifier';
 import {
-    initVault,
-    uploadDocument,
-    listDocuments,
-    getDocument,
-    deleteDocument,
-    warmupVaultKey,
-    type VaultDocument,
+    publishCertificateDocument,
+    importCertificateFromLink,
+    listStudentCerts,
+    getStudentCert,
+    removeStudentCert,
+    listIssued,
+    recordIssued,
+    markIssuedRevoked,
+    listProofHistory,
+    addProofHistory,
+    removeProofHistory,
+    type CertificateDocument,
 } from './vault';
 import {
-    generateProof,
-    verifyProof,
-    listProofs,
-    deleteProof,
-    getDustBalance,
-    type ProofRecord,
-} from './proof';
+    buildCertShareLink,
+    buildVerifyLink,
+    parseShareInput,
+    parseUrlFragment,
+    bytesToB64u,
+    b64uToBytes,
+    type CertShareLinkPayload,
+    type VerifyLinkPayload,
+    type ParsedFragment,
+} from './links';
+import { cascadeHealth, isCascadeConfigured } from './cascade';
+import { initCrypto, toHex } from './crypto';
+import { CERT_FORM_FIELDS, CLAIMS, CLAIM_KEYS, type FieldDef } from './schemas';
 import {
-    type SchemaType,
-    SCHEMAS,
-    SCHEMA_TYPES,
-    getSchema,
-} from './schemas';
-import {
-    deserializeProof,
-    parseProofFromUrl,
-    type MidnightProof,
-    type VerificationResult,
-} from './midnight';
-import { DUST_PER_PROOF } from './config';
+    CONTRACT_ADDRESS_KEY,
+    DEFAULT_CONTRACT_ADDRESS,
+    MIDNIGHT_NETWORK_ID,
+    CASCADE_API_BASE,
+    DEGREE_LEVELS,
+} from './config';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-// Upload wizard state
-let uploadSchemaType: SchemaType | null = null;
+let providers: CertProviders | null = null;
+let registry:  CertificateRegistry | null = null;
 
-// Prove wizard state
-let proveDocumentId:  string | null = null;
-let proveClaimType:   string | null = null;
-let proveSchemaType:  SchemaType | null = null;
+let proveCertActionId: string | null = null;
+let proveClaimKey:     ClaimKey | null = null;
+
+// ── Contract address ──────────────────────────────────────────────────────────
+
+function getContractAddress(): string {
+    return localStorage.getItem(CONTRACT_ADDRESS_KEY) ?? DEFAULT_CONTRACT_ADDRESS;
+}
+
+function setContractAddress(address: string): void {
+    localStorage.setItem(CONTRACT_ADDRESS_KEY, address.trim());
+    registry = null; // force re-join on next use
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 export async function initUI(): Promise<void> {
     await initCrypto();
 
-    // Wire wallet button
-    const walletBtn = q<HTMLButtonElement>('#wallet-button');
-    walletBtn.addEventListener('click', handleWalletClick);
+    q<HTMLButtonElement>('#wallet-button').addEventListener('click', handleWalletClick);
 
-    // Tab navigation
     qa('.tab-button').forEach(btn => {
         btn.addEventListener('click', () => switchTab((btn as HTMLElement).dataset.tab!));
     });
 
-    // Vault tab
-    q('#open-upload-modal').addEventListener('click', openUploadModal);
-    q('#close-upload-modal').addEventListener('click', closeUploadModal);
-    q('#upload-overlay').addEventListener('click', closeUploadModal);
+    // Issue tab
+    renderIssueForm();
+    q('#issue-button').addEventListener('click', handleIssueCertificate);
+
+    // Certificates tab
+    q('#import-button').addEventListener('click', handleImportClick);
 
     // Prove tab
     qa('.prove-step-back').forEach(btn => {
         (btn as HTMLElement).addEventListener('click', () => {
-            const to = Number((btn as HTMLElement).dataset.to);
-            showProveStep(to);
+            showProveStep(Number((btn as HTMLElement).dataset.to));
+            if ((btn as HTMLElement).dataset.to === '1') renderProveCertList();
         });
     });
     q('#generate-proof-button').addEventListener('click', handleGenerateProof);
 
     // Verify tab
-    q('#verify-button').addEventListener('click', handleVerifyProof);
+    q('#verify-button').addEventListener('click', () => void handleVerifyClick());
     q('#verify-input').addEventListener('keydown', (e) => {
-        if ((e as KeyboardEvent).key === 'Enter') handleVerifyProof();
+        if ((e as KeyboardEvent).key === 'Enter' && !(e as KeyboardEvent).shiftKey) {
+            e.preventDefault();
+            void handleVerifyClick();
+        }
     });
 
-    // Check Keplr
-    if (!isKeplrInstalled()) {
-        walletBtn.textContent = '↗ Install Keplr';
-        walletBtn.addEventListener('click', () => window.open('https://www.keplr.app/', '_blank'), { once: true });
-        showStatus('Keplr wallet extension not detected. Some features require it.', 'warning');
+    // Settings modal
+    q('#open-settings').addEventListener('click', openSettings);
+    q('#close-settings').addEventListener('click', closeSettings);
+    q('#settings-overlay').addEventListener('click', closeSettings);
+    q('#save-contract-address').addEventListener('click', handleSaveContractAddress);
+    q('#deploy-registry-button').addEventListener('click', () => void handleDeployRegistry());
+
+    renderAll();
+
+    if (!isCascadeConfigured()) {
+        showStatus('⚠️ VITE_CASCADE_API_KEY is not set — Cascade uploads will fail. See .env.example.', 'warning', 10000);
     }
 
-    // Restore session
-    initializeWalletState();
-    if (isWalletConnected()) {
+    // Silent wallet session restore (only re-connects if previously connected).
+    restore1amSession()
+        .then(api => {
+            if (api) return afterWalletConnected();
+        })
+        .catch(() => { /* user can connect manually */ });
+
+    // Handle share links in the URL.
+    const pending = sessionStorage.getItem('lv_pending_fragment');
+    if (pending) {
+        sessionStorage.removeItem('lv_pending_fragment');
         try {
-            await initializeCascadeClient();
-            await initVault();
-            updateWalletUI();
-            renderAll();
-            showStatus('Welcome back! Session restored.', 'success');
+            await handleIncomingFragment(JSON.parse(pending) as ParsedFragment);
         } catch (err) {
-            console.warn('Session restore failed:', err);
-            disconnectWallet();
-            updateWalletUI();
+            showStatus(`Could not handle the shared link: ${String(err)}`, 'error');
+        }
+    } else {
+        const frag = parseUrlFragment();
+        if (frag) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+            await handleIncomingFragment(frag);
         }
     }
+}
 
-    // Handle verify link in URL
-    const pendingProof = parseProofFromUrl();
-    if (pendingProof) {
-        // Clear hash after capture
-        window.history.replaceState({}, document.title, window.location.pathname);
+async function handleIncomingFragment(frag: ParsedFragment): Promise<void> {
+    if (frag.kind === 'cert') {
+        switchTab('certs');
+        q<HTMLTextAreaElement>('#import-input').value = buildCertShareLink(frag.payload);
+        await runImport(frag.payload);
+    } else {
         switchTab('verify');
-        displayVerifyResult(verifyProof(pendingProof), pendingProof);
+        q<HTMLTextAreaElement>('#verify-input').value = buildVerifyLink(frag.payload);
+        await runVerify(frag.payload);
     }
 }
 
@@ -130,72 +175,75 @@ export async function initUI(): Promise<void> {
 
 async function handleWalletClick(): Promise<void> {
     if (isWalletConnected()) {
-        disconnectWallet();
+        disconnect1amWallet();
+        providers = null;
+        registry = null;
         updateWalletUI();
-        disableAppNav();
         showStatus('Wallet disconnected.', 'info');
         return;
     }
 
     const btn = q<HTMLButtonElement>('#wallet-button');
-    btn.disabled  = true;
+    btn.disabled = true;
     btn.textContent = 'Connecting…';
 
     try {
-        await connectWallet();
-        await initializeCascadeClient();
-        await initVault();
-        updateWalletUI();
-        renderAll();
-        showStatus('Wallet connected! Vault ready.', 'success');
+        await connect1amWallet();
+        await afterWalletConnected();
+        showStatus(`Connected to 1AM on Midnight ${MIDNIGHT_NETWORK_ID} — fees sponsored by ProofStation ⚡`, 'success');
     } catch (err) {
-        btn.disabled    = false;
-        btn.textContent = 'Connect Keplr';
-        showStatus(`Connection failed: ${String(err)}`, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Connect 1AM Wallet';
+        showStatus(`Connection failed: ${String(err)}`, 'error', 9000);
     }
+}
+
+async function afterWalletConnected(): Promise<void> {
+    const api = getConnectedApi();
+    if (!api) return;
+    providers = await buildProviders(api);
+    updateWalletUI();
 }
 
 function updateWalletUI(): void {
     const btn    = q<HTMLButtonElement>('#wallet-button');
     const status = q('#wallet-status');
-    const nav    = q('#tab-nav');
 
     if (isWalletConnected()) {
-        const addr = getConnectedAddress()!;
-        btn.textContent   = 'Disconnect';
-        btn.className     = 'btn-disconnect';
-        btn.disabled      = false;
+        const addr = getShieldedAddress() ?? '';
+        btn.textContent = 'Disconnect';
+        btn.className = 'btn-disconnect';
+        btn.disabled = false;
         status.textContent = formatAddress(addr);
-        status.className  = 'wallet-address';
-        nav.classList.remove('disabled');
-        updateDustDisplay();
+        status.className = 'wallet-address';
+        q('#gasless-badge').classList.remove('hidden');
     } else {
-        btn.textContent  = 'Connect Keplr';
-        btn.className    = 'btn-primary';
-        btn.disabled     = false;
+        btn.textContent = 'Connect 1AM Wallet';
+        btn.className = 'btn-primary';
+        btn.disabled = false;
         status.textContent = '';
         status.className = '';
-        nav.classList.add('disabled');
-        q('#dust-balance').classList.add('hidden');
+        q('#gasless-badge').classList.add('hidden');
     }
 }
 
-function updateDustDisplay(): void {
-    const addr = getConnectedAddress();
-    if (!addr) return;
-    const balance = getDustBalance(addr);
-    q('#dust-amount').textContent = balance.toLocaleString();
-    q('#dust-balance').classList.remove('hidden');
-}
-
-function disableAppNav(): void {
-    q('#tab-nav').classList.add('disabled');
+/** Join (or return the cached) registry contract. Requires wallet + address. */
+async function ensureRegistry(): Promise<CertificateRegistry> {
+    if (!providers) {
+        throw new Error('Connect the 1AM wallet first.');
+    }
+    const address = getContractAddress();
+    if (!address) {
+        throw new Error('No registry contract configured. Open ⚙️ Registry Settings to deploy one or paste an address.');
+    }
+    if (registry && registry.address === address) return registry;
+    registry = await CertificateRegistry.join(providers, address);
+    return registry;
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
 function switchTab(tab: string): void {
-
     qa('.tab-button').forEach(btn => {
         (btn as HTMLButtonElement).classList.toggle('active', (btn as HTMLElement).dataset.tab === tab);
     });
@@ -203,374 +251,359 @@ function switchTab(tab: string): void {
         (el as HTMLElement).classList.toggle('active', (el as HTMLElement).id === `tab-${tab}`);
     });
 
-    if (tab === 'prove') {
-        renderProveDocumentList();
-        // Pre-warm the vault key so the Keplr signing prompt appears here
-        // (a natural moment) rather than mid-proof-generation.
-        if (isWalletConnected()) {
-            warmupVaultKey().catch(err => {
-                showStatus(`⚠️ Could not unlock vault key: ${String(err)}`, 'warning', 8000);
-            });
-        }
-    }
+    if (tab === 'prove')   renderProveCertList();
     if (tab === 'history') renderHistory();
+    if (tab === 'certs')   renderStudentCerts();
+    if (tab === 'issue')   renderIssuedList();
 }
-
-// ── Render helpers ────────────────────────────────────────────────────────────
 
 function renderAll(): void {
-    renderVaultTab();
-    updateDustDisplay();
+    renderIssuedList();
+    renderStudentCerts();
+    renderHistory();
+    updateWalletUI();
 }
 
-// ── VAULT TAB ─────────────────────────────────────────────────────────────────
+// ── ISSUE TAB ─────────────────────────────────────────────────────────────────
 
-function renderVaultTab(): void {
-    const container = q('#vault-documents-container');
-    const docs      = listDocuments();
+function renderIssueForm(): void {
+    const form = q('#issue-fields-form');
+    const fieldsHtml = (Object.entries(CERT_FORM_FIELDS) as [string, FieldDef][])
+        .map(([key, def]) => fieldInputHtml(`field_${key}`, def))
+        .join('');
+    form.innerHTML = `
+        <div class="form-group">
+            <label for="cert-title">Certificate Title <span class="required">*</span></label>
+            <input type="text" id="cert-title" placeholder="BSc Computer Engineering — Class of 2025" required />
+        </div>
+        ${fieldsHtml}`;
+}
 
-    q<HTMLButtonElement>('#open-upload-modal').disabled = !isWalletConnected();
+function fieldInputHtml(id: string, def: FieldDef): string {
+    const required = def.optional ? '' : ' <span class="required">*</span>';
+    let input: string;
+    if (def.type === 'enum' && def.values) {
+        input = `<select id="${id}">${def.values.map(v => `<option value="${escAttr(v)}">${escHtml(v)}</option>`).join('')}</select>`;
+    } else if (def.type === 'boolean') {
+        input = `<label class="checkbox-label"><input type="checkbox" id="${id}" checked /><span>Yes</span></label>`;
+    } else if (def.type === 'number') {
+        const attrs = [
+            def.min !== undefined ? `min="${def.min}"` : '',
+            def.max !== undefined ? `max="${def.max}"` : '',
+            `step="${def.step ?? 'any'}"`,
+        ].join(' ');
+        input = `<input type="number" id="${id}" placeholder="${escAttr(def.placeholder ?? '')}" ${attrs} />`;
+    } else {
+        input = `<input type="text" id="${id}" placeholder="${escAttr(def.placeholder ?? '')}" />`;
+    }
+    return `<div class="form-group"><label for="${id}">${escHtml(def.label)}${required}</label>${input}</div>`;
+}
 
-    if (docs.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-icon">🔒</div>
-                <p>Your vault is empty.</p>
-                <p class="empty-sub">Upload a document to get started — it will be encrypted and stored permanently on Lumera's Cascade network.</p>
-            </div>`;
+function collectCertificateFields(): { title: string; fields: CertificateFields } {
+    const title = q<HTMLInputElement>('#cert-title').value.trim();
+    if (!title) throw new Error('Certificate title is required.');
+
+    const getStr = (key: string): string =>
+        (document.getElementById(`field_${key}`) as HTMLInputElement | HTMLSelectElement).value.trim();
+
+    const studentName    = getStr('studentName');
+    const studentId      = getStr('studentId');
+    const institution    = getStr('institution');
+    const degreeType     = getStr('degreeType') as CertificateFields['degreeType'];
+    const fieldOfStudy   = getStr('fieldOfStudy');
+    const yearRaw        = getStr('graduationYear');
+    const accredited     = (document.getElementById('field_accredited') as HTMLInputElement).checked;
+    const gpaRaw         = getStr('gpa');
+
+    if (!studentName || !studentId || !institution || !fieldOfStudy || !yearRaw) {
+        throw new Error('Please fill in all required fields.');
+    }
+    const graduationYear = parseInt(yearRaw, 10);
+    if (Number.isNaN(graduationYear)) throw new Error('Graduation year must be a number.');
+    const gpa = gpaRaw === '' ? null : Number(gpaRaw);
+    if (gpa !== null && (Number.isNaN(gpa) || gpa < 0 || gpa > 4)) {
+        throw new Error('GPA must be between 0 and 4.');
+    }
+
+    return {
+        title,
+        fields: { studentName, studentId, institution, degreeType, fieldOfStudy, graduationYear, accredited, gpa },
+    };
+}
+
+async function handleIssueCertificate(): Promise<void> {
+    let title: string;
+    let fields: CertificateFields;
+    try {
+        ({ title, fields } = collectCertificateFields());
+    } catch (err) {
+        showStatus(String(err instanceof Error ? err.message : err), 'error');
         return;
     }
 
-    container.innerHTML = docs.map(doc => buildDocumentCard(doc)).join('');
+    const progress = (pct: number, label: string) => {
+        q<HTMLElement>('#issue-progress-fill').style.width = `${pct}%`;
+        q('#issue-progress-text').textContent = label;
+    };
 
-    // Wire buttons
-    container.querySelectorAll<HTMLButtonElement>('[data-action="prove"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            switchTab('prove');
-            proveDocumentId = btn.dataset.docid!;
-            proveSchemaType = btn.dataset.schema as SchemaType;
-            showProveStep(2);
-            renderProveClaimList();
-        });
-    });
+    q('#issue-form-panel').classList.add('hidden');
+    q('#issue-result-panel').classList.add('hidden');
+    q('#issue-progress-panel').classList.remove('hidden');
 
-    container.querySelectorAll<HTMLButtonElement>('[data-action="delete"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (!confirm('Remove this document from your vault index? (The encrypted data on Cascade is permanent.)')) return;
-            deleteDocument(btn.dataset.docid!);
-            renderVaultTab();
-            showStatus('Document removed from vault index.', 'info');
+    try {
+        // The registry must be reachable before we inscribe anything permanent.
+        progress(2, 'Joining registry contract…');
+        const reg = await ensureRegistry();
+
+        // 1. Encode + commit.
+        progress(8, 'Computing certificate commitment…');
+        const { salt, idSalt } = newSalts();
+        const cert = encodeCertificate(fields, salt, idSalt);
+        const commitment = commitmentOf(cert);
+        const commitmentB64 = bytesToB64u(commitment);
+
+        // 2. Encrypt + inscribe on Cascade (30–60s).
+        const doc: CertificateDocument = {
+            v: 2,
+            type: 'lumera-vault/academic-credential',
+            title,
+            fields,
+            salt: bytesToB64u(salt),
+            idSalt: bytesToB64u(idSalt),
+            commitment: commitmentB64,
+            contractAddress: reg.address,
+            issuedAt: Date.now(),
+        };
+        const published = await publishCertificateDocument(doc, (pct, label) =>
+            progress(8 + Math.round(pct * 0.52), label));
+
+        // 3. Anchor on Midnight: commitment + Cascade pointer.
+        progress(64, 'Anchoring on Midnight (ZK proof via ProofStation)…');
+        const tx = await reg.issueCertificate(commitment, published.actionId);
+
+        progress(96, 'Building student share link…');
+        const shareLink = buildCertShareLink({
+            v: 2,
+            actionId: published.actionId,
+            key: published.keyB64u,
+            title,
         });
+
+        recordIssued({
+            title,
+            studentName: fields.studentName,
+            actionId: published.actionId,
+            commitment: commitmentB64,
+            shareLink,
+            txHash: tx.txHash,
+            issuedAt: Date.now(),
+            revoked: false,
+        });
+
+        progress(100, 'Done');
+        renderIssueResult({ title, fields, actionId: published.actionId, cascadeTx: published.txHash, midnightTx: tx.txHash, commitmentB64, shareLink });
+        renderIssuedList();
+        showStatus('✅ Certificate issued: stored on Cascade & anchored on Midnight.', 'success', 8000);
+    } catch (err) {
+        q('#issue-progress-panel').classList.add('hidden');
+        q('#issue-form-panel').classList.remove('hidden');
+        showStatus(`Issuing failed: ${friendlyError(err)}`, 'error', 12000);
+        return;
+    }
+    q('#issue-progress-panel').classList.add('hidden');
+}
+
+interface IssueResultInfo {
+    title:         string;
+    fields:        CertificateFields;
+    actionId:      string;
+    cascadeTx:     string;
+    midnightTx:    string;
+    commitmentB64: string;
+    shareLink:     string;
+}
+
+function renderIssueResult(r: IssueResultInfo): void {
+    const panel = q('#issue-result-panel');
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+        <div class="proof-result-card proof-pass">
+            <div class="proof-verdict-badge verdict-pass">✅ CERTIFICATE ISSUED</div>
+            <h3 class="proof-description">${escHtml(r.title)} — ${escHtml(r.fields.studentName)}</h3>
+            <div class="proof-details-grid">
+                <div class="proof-detail"><span class="proof-detail-label">Cascade Action ID</span><span class="mono">${escHtml(r.actionId)}</span></div>
+                <div class="proof-detail"><span class="proof-detail-label">Lumera Tx</span><span class="mono truncate" title="${escAttr(r.cascadeTx)}">${escHtml(r.cascadeTx.slice(0, 20))}…</span></div>
+                <div class="proof-detail"><span class="proof-detail-label">Midnight Tx</span><span class="mono truncate" title="${escAttr(r.midnightTx)}">${escHtml(r.midnightTx.slice(0, 20))}…</span></div>
+                <div class="proof-detail"><span class="proof-detail-label">Commitment</span><span class="mono truncate" title="${escAttr(r.commitmentB64)}">${escHtml(r.commitmentB64.slice(0, 24))}…</span></div>
+            </div>
+            <div class="proof-share-section">
+                <p class="share-label">Hand this link to the student — it contains the Cascade pointer <em>and</em> the decryption key:</p>
+                <div class="share-row">
+                    <input id="issue-share-link" type="text" readonly value="${escAttr(r.shareLink)}" />
+                    <button id="copy-issue-link" class="btn-primary btn-sm">Copy</button>
+                </div>
+            </div>
+            <div style="margin-top:1rem;">
+                <button id="issue-another" class="btn-ghost btn-sm">+ Issue Another</button>
+            </div>
+        </div>`;
+
+    q('#copy-issue-link').addEventListener('click', () => copyToClipboard(r.shareLink, '#copy-issue-link'));
+    q('#issue-another').addEventListener('click', () => {
+        panel.classList.add('hidden');
+        q('#issue-form-panel').classList.remove('hidden');
     });
 }
 
-function buildDocumentCard(doc: VaultDocument): string {
-    const schema     = getSchema(doc.schemaType);
-    const dateStr    = new Date(doc.uploadedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-    const sizeKb     = (doc.sizeBytes / 1024).toFixed(1);
-    const isLocal    = doc.cascadeActionId.startsWith('local_');
-    const storageBadge = isLocal
-        ? '<span class="badge badge-warning">Local</span>'
-        : '<span class="badge badge-success">Cascade</span>';
-
-    return `
-        <div class="document-card" data-docid="${doc.documentId}">
-            <div class="doc-card-header">
-                <div class="doc-icon" style="background: ${schema.accentColor}22; color: ${schema.accentColor}">
-                    ${schema.icon}
+function renderIssuedList(): void {
+    const container = q('#issued-list-container');
+    const issued = listIssued();
+    if (issued.length === 0) {
+        container.innerHTML = `<div class="empty-state"><div class="empty-icon">📜</div><p>No certificates issued from this browser yet.</p></div>`;
+        return;
+    }
+    container.innerHTML = issued.map((e, i) => `
+        <div class="history-row">
+            <div class="history-left">
+                <span class="history-schema-icon" style="color:#6366f1">🎓</span>
+                <div class="history-meta">
+                    <div class="history-title">${escHtml(e.title)} — ${escHtml(e.studentName)} ${e.revoked ? '<span class="badge badge-error">Revoked</span>' : ''}</div>
+                    <div class="history-sub">Cascade #${escHtml(e.actionId)} · ${new Date(e.issuedAt).toLocaleString()}</div>
+                    <div class="history-proofid mono" title="${escAttr(e.commitment)}">${escHtml(e.commitment.slice(0, 28))}…</div>
                 </div>
+            </div>
+            <div class="history-right">
+                <button class="btn-ghost btn-xs" data-action="copy-issued" data-i="${i}">Copy Link</button>
+                ${e.revoked ? '' : `<button class="btn-ghost btn-xs" data-action="revoke" data-i="${i}">⛔ Revoke</button>`}
+            </div>
+        </div>`).join('');
+
+    container.querySelectorAll<HTMLButtonElement>('[data-action="copy-issued"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const e = listIssued()[Number(btn.dataset.i)];
+            if (e) void navigator.clipboard.writeText(e.shareLink).then(() => showStatus('Share link copied.', 'info', 2500));
+        });
+    });
+    container.querySelectorAll<HTMLButtonElement>('[data-action="revoke"]').forEach(btn => {
+        btn.addEventListener('click', () => void handleRevoke(Number(btn.dataset.i)));
+    });
+}
+
+async function handleRevoke(index: number): Promise<void> {
+    const entry = listIssued()[index];
+    if (!entry) return;
+    if (!confirm(`Revoke "${entry.title}" for ${entry.studentName}? Verifiers will see it as revoked.`)) return;
+    try {
+        const reg = await ensureRegistry();
+        showStatus('Submitting revocation to Midnight…', 'info', 0);
+        await reg.revokeCertificate(b64uToBytes(entry.commitment));
+        markIssuedRevoked(entry.commitment);
+        renderIssuedList();
+        showStatus('Certificate revoked on-chain.', 'success');
+    } catch (err) {
+        showStatus(`Revocation failed: ${friendlyError(err)}`, 'error', 9000);
+    }
+}
+
+// ── MY CERTIFICATES TAB ───────────────────────────────────────────────────────
+
+async function handleImportClick(): Promise<void> {
+    const input = q<HTMLTextAreaElement>('#import-input').value.trim();
+    if (!input) { showStatus('Paste a certificate link first.', 'warning'); return; }
+    const parsed = parseShareInput(input);
+    if (!parsed || parsed.kind !== 'cert') {
+        showStatus('That does not look like a certificate link (expected …#cert/…).', 'error');
+        return;
+    }
+    await runImport(parsed.payload);
+}
+
+async function runImport(payload: CertShareLinkPayload): Promise<void> {
+    const progressEl = q('#import-progress');
+    progressEl.classList.remove('hidden');
+    const progress = (pct: number, label: string) => {
+        q<HTMLElement>('#import-progress-fill').style.width = `${pct}%`;
+        q('#import-progress-text').textContent = label;
+    };
+    try {
+        const cert = await importCertificateFromLink(payload, progress);
+        progressEl.classList.add('hidden');
+        q<HTMLTextAreaElement>('#import-input').value = '';
+        renderStudentCerts();
+        showStatus(`✅ "${cert.title}" imported — fetched from Cascade and decrypted locally.`, 'success');
+    } catch (err) {
+        progressEl.classList.add('hidden');
+        showStatus(`Import failed: ${friendlyError(err)}`, 'error', 10000);
+    }
+}
+
+function certSummary(doc: CertificateDocument): string {
+    const f = doc.fields;
+    return `${f.degreeType} in ${f.fieldOfStudy}, ${f.institution} (${f.graduationYear})`;
+}
+
+function renderStudentCerts(): void {
+    const container = q('#student-certs-container');
+    const certs = listStudentCerts();
+    if (certs.length === 0) {
+        container.innerHTML = `<div class="empty-state"><div class="empty-icon">🎓</div><p>No certificates yet.</p><p class="empty-sub">Paste the share link from your school above.</p></div>`;
+        return;
+    }
+    container.innerHTML = certs.map(c => `
+        <div class="document-card">
+            <div class="doc-card-header">
+                <div class="doc-icon" style="background:#6366f122; color:#6366f1">🎓</div>
                 <div class="doc-meta">
-                    <h3 class="doc-title">${escHtml(doc.title)}</h3>
+                    <h3 class="doc-title">${escHtml(c.title)}</h3>
                     <div class="doc-badges">
-                        <span class="badge" style="background: ${schema.accentColor}22; color: ${schema.accentColor}">${schema.label}</span>
-                        ${storageBadge}
+                        <span class="badge" style="background:#6366f122; color:#6366f1">${escHtml(c.doc.fields.studentName)}</span>
+                        <span class="badge badge-success">Cascade #${escHtml(c.actionId)}</span>
                     </div>
                 </div>
             </div>
             <div class="doc-card-body">
-                <div class="doc-detail">
-                    <span class="doc-detail-label">Uploaded</span>
-                    <span>${escHtml(dateStr)}</span>
-                </div>
-                <div class="doc-detail">
-                    <span class="doc-detail-label">Size</span>
-                    <span>${sizeKb} KB</span>
-                </div>
-                <div class="doc-detail doc-detail-mono">
-                    <span class="doc-detail-label">Commitment</span>
-                    <span title="${doc.documentCommitment}" class="mono truncate">${doc.documentCommitment.slice(0, 20)}…</span>
-                </div>
-                ${!isLocal ? `<div class="doc-detail doc-detail-mono">
-                    <span class="doc-detail-label">Cascade ID</span>
-                    <span class="mono truncate">${escHtml(doc.cascadeActionId)}</span>
-                </div>` : ''}
+                <div class="doc-detail"><span class="doc-detail-label">Certificate</span><span>${escHtml(certSummary(c.doc))}</span></div>
+                <div class="doc-detail"><span class="doc-detail-label">Imported</span><span>${new Date(c.importedAt).toLocaleDateString()}</span></div>
+                <div class="doc-detail doc-detail-mono"><span class="doc-detail-label">Commitment</span><span class="mono truncate" title="${escAttr(c.doc.commitment)}">${escHtml(c.doc.commitment.slice(0, 22))}…</span></div>
+                <div class="doc-detail doc-detail-mono"><span class="doc-detail-label">Registry</span><span class="mono truncate" title="${escAttr(c.doc.contractAddress)}">${escHtml(c.doc.contractAddress.slice(0, 22))}…</span></div>
             </div>
             <div class="doc-card-actions">
-                <button class="btn-primary btn-sm" data-action="prove" data-docid="${doc.documentId}" data-schema="${doc.schemaType}">
-                    🔐 Generate Proof
-                </button>
-                <button class="btn-ghost btn-sm" data-action="delete" data-docid="${doc.documentId}">
-                    🗑 Remove
-                </button>
+                <button class="btn-primary btn-sm" data-action="prove-cert" data-id="${escAttr(c.actionId)}">🔐 Prove a Claim</button>
+                <button class="btn-ghost btn-sm" data-action="copy-cert-link" data-id="${escAttr(c.actionId)}">Copy Link</button>
+                <button class="btn-ghost btn-sm" data-action="remove-cert" data-id="${escAttr(c.actionId)}">🗑 Remove</button>
             </div>
-        </div>`;
-}
+        </div>`).join('');
 
-// ── UPLOAD MODAL ──────────────────────────────────────────────────────────────
-
-function openUploadModal(): void {
-    if (!isWalletConnected()) { showStatus('Connect your wallet first.', 'warning'); return; }
-    uploadSchemaType = null;
-    showUploadStep(1);
-    q('#upload-modal').classList.remove('hidden');
-    q('#upload-overlay').classList.remove('hidden');
-    renderSchemaGrid();
-}
-
-function closeUploadModal(): void {
-    q('#upload-modal').classList.add('hidden');
-    q('#upload-overlay').classList.add('hidden');
-    showUploadStep(1);
-    uploadSchemaType = null;
-}
-
-function showUploadStep(step: number): void {
-    [1, 2, 3].forEach(n => {
-        const el = document.getElementById(`upload-step-${n}`);
-        if (el) el.classList.toggle('hidden', n !== step);
-    });
-}
-
-function renderSchemaGrid(): void {
-    const grid = q('#schema-grid');
-    grid.innerHTML = SCHEMA_TYPES.map(type => {
-        const s = SCHEMAS[type];
-        return `
-            <button class="schema-card" data-schema="${type}" style="--accent: ${s.accentColor}">
-                <span class="schema-card-icon">${s.icon}</span>
-                <span class="schema-card-label">${s.label}</span>
-                <span class="schema-card-desc">${s.description}</span>
-            </button>`;
-    }).join('');
-
-    grid.querySelectorAll<HTMLButtonElement>('[data-schema]').forEach(btn => {
+    container.querySelectorAll<HTMLButtonElement>('[data-action="prove-cert"]').forEach(btn => {
         btn.addEventListener('click', () => {
-            uploadSchemaType = btn.dataset.schema as SchemaType;
-            q('#upload-step2-schema-label').textContent = `${SCHEMAS[uploadSchemaType].icon} ${SCHEMAS[uploadSchemaType].label}`;
-            renderDocumentFieldsForm(uploadSchemaType);
-            showUploadStep(2);
+            proveCertActionId = btn.dataset.id!;
+            switchTab('prove');
+            const cert = getStudentCert(proveCertActionId);
+            if (cert) {
+                q('#prove-selected-cert').textContent = cert.title;
+                renderProveClaimList();
+                showProveStep(2);
+            }
         });
     });
-}
-
-function renderDocumentFieldsForm(schemaType: SchemaType): void {
-    const schema = getSchema(schemaType);
-    const form   = q('#document-fields-form');
-
-    const fieldsHtml = Object.entries(schema.fields).map(([key, def]) => {
-        const required = def.optional ? '' : ' <span class="required">*</span>';
-        let input      = '';
-
-        if (def.type === 'enum' && def.values) {
-            input = `<select id="field_${key}" name="${key}" ${def.optional ? '' : 'required'}>
-                ${def.values.map(v => `<option value="${v}">${v}</option>`).join('')}
-            </select>`;
-        } else if (def.type === 'boolean') {
-            input = `<label class="checkbox-label">
-                <input type="checkbox" id="field_${key}" name="${key}" />
-                <span>Yes</span>
-            </label>`;
-        } else if (def.type === 'number') {
-            const minAttr = def.min !== undefined ? `min="${def.min}"` : '';
-            const maxAttr = def.max !== undefined ? `max="${def.max}"` : '';
-            input = `<input type="number" id="field_${key}" name="${key}" placeholder="${def.placeholder ?? ''}" ${minAttr} ${maxAttr} step="any" ${def.optional ? '' : 'required'} />`;
-        } else if (def.type === 'date') {
-            input = `<input type="date" id="field_${key}" name="${key}" ${def.optional ? '' : 'required'} />`;
-        } else if (def.type === 'string_array') {
-            input = `<input type="text" id="field_${key}" name="${key}" placeholder="${def.placeholder ?? 'comma-separated values'}" ${def.optional ? '' : 'required'} />`;
-        } else {
-            input = `<input type="text" id="field_${key}" name="${key}" placeholder="${def.placeholder ?? ''}" ${def.optional ? '' : 'required'} />`;
-        }
-
-        return `
-            <div class="form-group">
-                <label for="field_${key}">${def.label}${required}</label>
-                ${input}
-                ${def.type === 'string_array' ? '<span class="field-hint">Separate multiple values with commas</span>' : ''}
-            </div>`;
-    }).join('');
-
-    form.innerHTML = `
-        <div class="form-group">
-            <label for="doc-title">Document Title <span class="required">*</span></label>
-            <input type="text" id="doc-title" placeholder="My Computer Science Diploma" required />
-        </div>
-        ${fieldsHtml}
-        <div class="upload-cost-notice">
-            <span class="cost-icon">🌙</span> Generating proofs costs <strong>${DUST_PER_PROOF} DUST</strong> per proof
-        </div>
-        <div class="upload-actions">
-            <button type="button" id="back-to-step1" class="btn-ghost">← Back</button>
-            <button type="button" id="encrypt-upload-button" class="btn-primary">
-                🔒 Encrypt & Store
-            </button>
-        </div>`;
-
-    q('#back-to-step1').addEventListener('click', () => showUploadStep(1));
-    q('#encrypt-upload-button').addEventListener('click', handleEncryptUpload);
-}
-
-async function handleEncryptUpload(): Promise<void> {
-    if (!uploadSchemaType) return;
-
-    const title = (q<HTMLInputElement>('#doc-title')).value.trim();
-    if (!title) { showStatus('Please enter a document title.', 'error'); return; }
-
-    const schema = getSchema(uploadSchemaType);
-    const fields: Record<string, unknown> = {};
-
-    let valid = true;
-    for (const [key, def] of Object.entries(schema.fields)) {
-        const el = document.getElementById(`field_${key}`) as HTMLInputElement | HTMLSelectElement | null;
-        if (!el) continue;
-
-        if (def.type === 'boolean') {
-            fields[key] = (el as HTMLInputElement).checked;
-        } else if (def.type === 'number') {
-            const val = (el as HTMLInputElement).value.trim();
-            if (!def.optional && val === '') { valid = false; el.classList.add('error'); continue; }
-            fields[key] = val !== '' ? parseFloat(val) : undefined;
-        } else if (def.type === 'string_array') {
-            const val = el.value.trim();
-            fields[key] = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [];
-        } else {
-            const val = el.value.trim();
-            if (!def.optional && val === '') { valid = false; el.classList.add('error'); continue; }
-            fields[key] = val;
-        }
-    }
-
-    if (!valid) { showStatus('Please fill in all required fields.', 'error'); return; }
-
-    showUploadStep(3);
-
-    try {
-        await uploadDocument({
-            title,
-            schemaType: uploadSchemaType,
-            fields,
-            onProgress: (pct, label) => {
-                const fillEl = document.getElementById('upload-progress-fill') as HTMLElement | null;
-                if (fillEl) fillEl.style.width = `${pct}%`;
-                const textEl = document.getElementById('upload-progress-text') as HTMLElement | null;
-                if (textEl) textEl.textContent = label;
-            },
+    container.querySelectorAll<HTMLButtonElement>('[data-action="copy-cert-link"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const c = getStudentCert(btn.dataset.id!);
+            if (!c) return;
+            const link = buildCertShareLink({ v: 2, actionId: c.actionId, key: c.keyB64u, title: c.title });
+            void navigator.clipboard.writeText(link).then(() => showStatus('Certificate link copied.', 'info', 2500));
         });
-
-        closeUploadModal();
-        renderVaultTab();
-        showStatus(`✅ "${escHtml(title)}" encrypted and stored on Cascade!`, 'success');
-    } catch (err) {
-        showUploadStep(2);
-        showStatus(`Upload failed: ${String(err)}`, 'error');
-    }
+    });
+    container.querySelectorAll<HTMLButtonElement>('[data-action="remove-cert"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!confirm('Remove this certificate from this browser? (It stays on Cascade forever — re-import any time with the link.)')) return;
+            removeStudentCert(btn.dataset.id!);
+            renderStudentCerts();
+        });
+    });
 }
 
 // ── PROVE TAB ─────────────────────────────────────────────────────────────────
-
-function renderProveDocumentList(): void {
-    showProveStep(1);
-    proveDocumentId = null;
-    proveClaimType  = null;
-    proveSchemaType = null;
-
-    const container = q('#prove-documents-container');
-    const docs      = listDocuments();
-
-    if (docs.length === 0) {
-        container.innerHTML = `<div class="empty-state"><p>No documents in vault. Upload a document first.</p></div>`;
-        return;
-    }
-
-    container.innerHTML = docs.map(doc => {
-        const schema = getSchema(doc.schemaType);
-        return `
-            <button class="selectable-card" data-docid="${doc.documentId}" data-schema="${doc.schemaType}">
-                <span class="sel-card-icon" style="color: ${schema.accentColor}">${schema.icon}</span>
-                <span class="sel-card-info">
-                    <span class="sel-card-title">${escHtml(doc.title)}</span>
-                    <span class="sel-card-sub">${schema.label}</span>
-                </span>
-                <span class="sel-card-arrow">→</span>
-            </button>`;
-    }).join('');
-
-    container.querySelectorAll<HTMLButtonElement>('[data-docid]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            proveDocumentId = btn.dataset.docid!;
-            proveSchemaType = btn.dataset.schema as SchemaType;
-            q('#prove-selected-doc').textContent = docs.find(d => d.documentId === proveDocumentId)?.title ?? '';
-            renderProveClaimList();
-            showProveStep(2);
-        });
-    });
-}
-
-function renderProveClaimList(): void {
-    if (!proveSchemaType) return;
-    const schema    = getSchema(proveSchemaType);
-    const container = q('#prove-claims-container');
-
-    container.innerHTML = Object.entries(schema.claims).map(([claimKey, claimDef]) => `
-        <button class="selectable-card" data-claim="${claimKey}">
-            <span class="sel-card-icon" style="color: ${schema.accentColor}">🔐</span>
-            <span class="sel-card-info">
-                <span class="sel-card-title">${claimDef.label}</span>
-                <span class="sel-card-sub">${claimDef.description}</span>
-            </span>
-            <span class="sel-card-arrow">→</span>
-        </button>`).join('');
-
-    container.querySelectorAll<HTMLButtonElement>('[data-claim]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            proveClaimType = btn.dataset.claim!;
-            q('#prove-selected-claim').textContent = schema.claims[proveClaimType]?.label ?? '';
-            renderProveParamsForm();
-            showProveStep(3);
-        });
-    });
-}
-
-function renderProveParamsForm(): void {
-    if (!proveSchemaType || !proveClaimType) return;
-    const claimDef   = getSchema(proveSchemaType).claims[proveClaimType];
-    const container  = q('#prove-params-form');
-
-    // Populate the step-3 breadcrumb with the document title
-    const docTitleEl = document.getElementById('prove-selected-doc-3');
-    if (docTitleEl && proveDocumentId) {
-        docTitleEl.textContent = getDocument(proveDocumentId)?.title ?? '';
-    }
-
-    if (claimDef.params.length === 0) {
-        container.innerHTML = `<p class="no-params-notice">No parameters needed — this claim is self-contained.</p>`;
-        return;
-    }
-
-    container.innerHTML = claimDef.params.map(param => {
-        let input = '';
-        if (param.type === 'enum' && param.values) {
-            input = `<select id="param_${param.name}" name="${param.name}">
-                ${param.values.map(v => `<option value="${v}">${v}</option>`).join('')}
-            </select>`;
-        } else if (param.type === 'number') {
-            input = `<input type="number" id="param_${param.name}" placeholder="${param.placeholder ?? ''}" step="any" />`;
-        } else {
-            input = `<input type="text" id="param_${param.name}" placeholder="${param.placeholder ?? ''}" />`;
-        }
-        return `<div class="form-group"><label for="param_${param.name}">${param.label}</label>${input}</div>`;
-    }).join('');
-}
 
 function showProveStep(step: number): void {
     [1, 2, 3, 4].forEach(n => {
@@ -579,51 +612,188 @@ function showProveStep(step: number): void {
     });
 }
 
-async function handleGenerateProof(): Promise<void> {
-    if (!proveDocumentId || !proveClaimType || !proveSchemaType) return;
+function renderProveCertList(): void {
+    showProveStep(1);
+    proveClaimKey = null;
 
-    const claimDef    = getSchema(proveSchemaType).claims[proveClaimType];
-    const claimParams: Record<string, unknown> = {};
+    const container = q('#prove-certs-container');
+    const certs = listStudentCerts();
+    if (certs.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>No certificates imported. Go to 🎓 My Certificates and paste your share link first.</p></div>`;
+        return;
+    }
+    container.innerHTML = certs.map(c => `
+        <button class="selectable-card" data-id="${escAttr(c.actionId)}">
+            <span class="sel-card-icon" style="color:#6366f1">🎓</span>
+            <span class="sel-card-info">
+                <span class="sel-card-title">${escHtml(c.title)}</span>
+                <span class="sel-card-sub">${escHtml(certSummary(c.doc))}</span>
+            </span>
+            <span class="sel-card-arrow">→</span>
+        </button>`).join('');
 
-    for (const param of claimDef.params) {
+    container.querySelectorAll<HTMLButtonElement>('[data-id]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            proveCertActionId = btn.dataset.id!;
+            const cert = getStudentCert(proveCertActionId);
+            q('#prove-selected-cert').textContent = cert?.title ?? '';
+            renderProveClaimList();
+            showProveStep(2);
+        });
+    });
+}
+
+function renderProveClaimList(): void {
+    const container = q('#prove-claims-container');
+    container.innerHTML = CLAIM_KEYS.map(key => {
+        const def = CLAIMS[key];
+        return `
+        <button class="selectable-card" data-claim="${key}">
+            <span class="sel-card-icon" style="color:#6366f1">🔐</span>
+            <span class="sel-card-info">
+                <span class="sel-card-title">${escHtml(def.label)}</span>
+                <span class="sel-card-sub">${escHtml(def.description)}</span>
+            </span>
+            <span class="sel-card-arrow">→</span>
+        </button>`;
+    }).join('');
+
+    container.querySelectorAll<HTMLButtonElement>('[data-claim]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            proveClaimKey = btn.dataset.claim as ClaimKey;
+            q('#prove-selected-claim').textContent = CLAIMS[proveClaimKey].label;
+            const certTitle = getStudentCert(proveCertActionId ?? '')?.title ?? '';
+            q('#prove-selected-cert-3').textContent = certTitle;
+            renderProveParamsForm();
+            showProveStep(3);
+        });
+    });
+}
+
+function renderProveParamsForm(): void {
+    if (!proveClaimKey) return;
+    const def = CLAIMS[proveClaimKey];
+    const container = q('#prove-params-form');
+    if (def.params.length === 0) {
+        container.innerHTML = `<p class="no-params-notice">No parameters needed — this claim is self-contained.</p>`;
+        return;
+    }
+    container.innerHTML = def.params.map(param => {
+        let input: string;
+        if (param.type === 'enum' && param.values) {
+            input = `<select id="param_${param.name}">${param.values.map(v => `<option value="${escAttr(v)}">${escHtml(v)}</option>`).join('')}</select>`;
+        } else if (param.type === 'number') {
+            input = `<input type="number" id="param_${param.name}" placeholder="${escAttr(param.placeholder ?? '')}" step="any" />`;
+        } else {
+            input = `<input type="text" id="param_${param.name}" placeholder="${escAttr(param.placeholder ?? '')}" />`;
+        }
+        return `<div class="form-group"><label for="param_${param.name}">${escHtml(param.label)}</label>${input}</div>`;
+    }).join('');
+}
+
+function collectClaimParams(): Record<string, string | number> {
+    if (!proveClaimKey) return {};
+    const out: Record<string, string | number> = {};
+    for (const param of CLAIMS[proveClaimKey].params) {
         const el = document.getElementById(`param_${param.name}`) as HTMLInputElement | HTMLSelectElement | null;
         if (!el) continue;
-        if (param.type === 'number') {
-            const val = (el as HTMLInputElement).value.trim();
-            if (!val) { showStatus(`Parameter "${param.label}" is required.`, 'error'); return; }
-            claimParams[param.name] = parseFloat(val);
-        } else {
-            const val = el.value.trim();
-            if (!val) { showStatus(`Parameter "${param.label}" is required.`, 'error'); return; }
-            claimParams[param.name] = val;
-        }
+        const raw = el.value.trim();
+        if (!raw) throw new Error(`Parameter "${param.label}" is required.`);
+        out[param.name] = param.type === 'number' ? Number(raw) : raw;
+    }
+    return out;
+}
+
+async function handleGenerateProof(): Promise<void> {
+    if (!proveCertActionId || !proveClaimKey) return;
+    const studentCert = getStudentCert(proveCertActionId);
+    if (!studentCert) { showStatus('Certificate not found in vault.', 'error'); return; }
+
+    let claimParams: Record<string, string | number>;
+    try {
+        claimParams = collectClaimParams();
+    } catch (err) {
+        showStatus(String(err instanceof Error ? err.message : err), 'error');
+        return;
+    }
+    const discloseIdentity = q<HTMLInputElement>('#prove-disclose-identity').checked;
+
+    const doc = studentCert.doc;
+    const cert = encodeCertificate(doc.fields, b64uToBytes(doc.salt), b64uToBytes(doc.idSalt));
+    const commitment = commitmentOf(cert);
+    if (bytesToB64u(commitment) !== doc.commitment) {
+        showStatus('Certificate document is inconsistent (commitment mismatch) — contact the issuer.', 'error', 10000);
+        return;
+    }
+
+    const claim = prepareClaim(proveClaimKey, claimParams);
+
+    // Pre-flight: an unsatisfied claim can never produce a valid ZK proof.
+    if (!satisfiesClaim(cert, claim)) {
+        showStatus(`❌ Your certificate does not satisfy "${claim.description}" — no proof is possible. (This is the ZK guarantee working.)`, 'warning', 10000);
+        return;
     }
 
     const btn = q<HTMLButtonElement>('#generate-proof-button');
-    btn.disabled    = true;
-    btn.textContent = '⚡ Generating…';
-
+    btn.disabled = true;
+    btn.textContent = '⚡ Proving…';
     showProveStep(4);
     renderProofInProgress();
 
     try {
-        const result = await generateProof({
-            documentId:  proveDocumentId,
-            claimType:   proveClaimType,
+        const reg = await ensureRegistry();
+        if (reg.address !== doc.contractAddress) {
+            showStatus(`Note: this certificate was issued on registry ${doc.contractAddress.slice(0, 18)}… — switching to it.`, 'info', 6000);
+            setContractAddress(doc.contractAddress);
+        }
+        const reg2 = await ensureRegistry();
+
+        markProofStep(1);
+        let tx;
+        switch (claim.claimKey) {
+            case 'has_degree_in':
+                tx = await reg2.proveDegreeInField(cert, claim.hashParam); break;
+            case 'graduated_from_accredited':
+                tx = await reg2.proveAccredited(cert); break;
+            case 'degree_level_at_least':
+                tx = await reg2.proveDegreeLevelAtLeast(cert, claim.numericParam); break;
+            case 'gpa_above':
+                tx = await reg2.proveGpaAbove(cert, claim.numericParam); break;
+        }
+        markProofStep(4);
+
+        const link = buildVerifyLink({
+            v: 2,
+            contractAddress: doc.contractAddress,
+            commitment: doc.commitment,
+            claimKey: claim.claimKey,
             claimParams,
-            onProgress: (pct, label) => updateProofProgress(pct, label),
+            txHash: tx.txHash,
+            identity: discloseIdentity
+                ? {
+                      name: doc.fields.studentName,
+                      id: doc.fields.studentId,
+                      idSalt: toHex(b64uToBytes(doc.idSalt)),
+                  }
+                : undefined,
         });
 
-        btn.disabled    = false;
-        btn.textContent = '⚡ Generate ZK Proof';
+        addProofHistory({
+            description: claim.description,
+            certTitle: studentCert.title,
+            link,
+            txHash: tx.txHash,
+            when: Date.now(),
+        });
 
-        renderProofResult(result.proof, result.proofLink);
-        updateDustDisplay();
+        renderProofResult(claim.description, tx.txHash, link, discloseIdentity);
+        showStatus('✅ ZK proof recorded on Midnight.', 'success');
     } catch (err) {
-        btn.disabled    = false;
-        btn.textContent = '⚡ Generate ZK Proof';
         showProveStep(3);
-        showStatus(`Proof generation failed: ${String(err)}`, 'error');
+        showStatus(`Proof generation failed: ${friendlyError(err)}`, 'error', 12000);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '⚡ Generate ZK Proof';
     }
 }
 
@@ -631,199 +801,108 @@ function renderProofInProgress(): void {
     q('#prove-result-container').innerHTML = `
         <div class="proof-generating">
             <div class="zk-spinner"></div>
-            <p id="proof-gen-label" class="proof-gen-label">Initializing circuit…</p>
-            <div class="proof-progress-bar"><div id="proof-progress-fill" style="width:0%"></div></div>
+            <p id="proof-gen-label" class="proof-gen-label">Running the Compact circuit…</p>
             <div class="midnight-steps">
-                <div class="mid-step" id="mid-step-1">⏳ Decrypting document locally</div>
-                <div class="mid-step" id="mid-step-2">⏳ Running Compact circuit</div>
-                <div class="mid-step" id="mid-step-3">⏳ Generating Groth16 proof points</div>
-                <div class="mid-step" id="mid-step-4">⏳ Computing nullifier & VK</div>
-                <div class="mid-step" id="mid-step-5">⏳ Submitting to Midnight</div>
+                <div class="mid-step" id="mid-step-1">⏳ Loading certificate witness</div>
+                <div class="mid-step" id="mid-step-2">⏳ Generating ZK proof (ProofStation, ~2–5s)</div>
+                <div class="mid-step" id="mid-step-3">⏳ Balancing transaction (fees sponsored)</div>
+                <div class="mid-step" id="mid-step-4">⏳ Submitting to Midnight preprod</div>
             </div>
         </div>`;
 }
 
-function updateProofProgress(pct: number, label: string): void {
-    const fillEl = document.getElementById('proof-progress-fill');
-    if (fillEl) fillEl.style.width = `${pct}%`;
-    const labelEl = document.getElementById('proof-gen-label');
-    if (labelEl) labelEl.textContent = label;
-
-    // Animate steps
-    const steps = [5, 25, 56, 75, 90];
-    steps.forEach((threshold, i) => {
-        const stepEl = document.getElementById(`mid-step-${i + 1}`);
-        if (!stepEl) return;
-        if (pct >= threshold) {
-            stepEl.textContent = stepEl.textContent!.replace('⏳', '✅');
-            stepEl.classList.add('done');
+function markProofStep(upTo: number): void {
+    for (let i = 1; i <= upTo; i++) {
+        const el = document.getElementById(`mid-step-${i}`);
+        if (el) {
+            el.textContent = (el.textContent ?? '').replace('⏳', '✅');
+            el.classList.add('done');
         }
-    });
+    }
 }
 
-function renderProofResult(proof: MidnightProof, proofLink: string): void {
-    const verdict = proof.satisfiesClaim;
-    const schema  = getSchema(proof.schemaType);
-
+function renderProofResult(description: string, txHash: string, link: string, identityDisclosed: boolean): void {
     q('#prove-result-container').innerHTML = `
-        <div class="proof-result-card ${verdict ? 'proof-pass' : 'proof-fail'}">
-            <div class="proof-verdict-badge ${verdict ? 'verdict-pass' : 'verdict-fail'}">
-                ${verdict ? '✅ CLAIM SATISFIED' : '❌ CLAIM NOT MET'}
-            </div>
-            <h3 class="proof-description">${escHtml(proof.claimDescription)}</h3>
-
+        <div class="proof-result-card proof-pass">
+            <div class="proof-verdict-badge verdict-pass">✅ PROOF RECORDED ON MIDNIGHT</div>
+            <h3 class="proof-description">${escHtml(description)}</h3>
             <div class="proof-details-grid">
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Schema</span>
-                    <span>${schema.icon} ${schema.label}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Claim</span>
-                    <span>${escHtml(proof.claimType)}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Proof ID</span>
-                    <span class="mono">${proof.proofId}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Midnight Tx</span>
-                    <span class="mono truncate">${proof.midnightTxHash.slice(0, 20)}…</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Contract</span>
-                    <span class="mono">${proof.contractId}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Document Commitment</span>
-                    <span class="mono truncate">${proof.documentCommitment.slice(0, 24)}…</span>
-                </div>
+                <div class="proof-detail"><span class="proof-detail-label">Midnight Tx</span><span class="mono truncate" title="${escAttr(txHash)}">${escHtml(txHash.slice(0, 24))}…</span></div>
+                <div class="proof-detail"><span class="proof-detail-label">Network</span><span>Midnight ${escHtml(MIDNIGHT_NETWORK_ID)}</span></div>
+                <div class="proof-detail"><span class="proof-detail-label">Identity</span><span>${identityDisclosed ? 'Disclosed to verifier' : 'Not disclosed'}</span></div>
+                <div class="proof-detail"><span class="proof-detail-label">Cost</span><span>0 — sponsored by ProofStation ⚡</span></div>
             </div>
-
-            <div class="groth16-section">
-                <div class="groth16-label">Groth16 Proof Transcript</div>
-                <div class="groth16-points">
-                    <div><span class="point-label">π_A</span><span class="mono proof-point">${proof.proof.a}</span></div>
-                    <div><span class="point-label">π_B·x</span><span class="mono proof-point">${proof.proof.b[0]}</span></div>
-                    <div><span class="point-label">π_B·y</span><span class="mono proof-point">${proof.proof.b[1]}</span></div>
-                    <div><span class="point-label">π_C</span><span class="mono proof-point">${proof.proof.c}</span></div>
-                </div>
-            </div>
-
             <div class="proof-share-section">
-                <p class="share-label">Share this proof link with the verifier:</p>
+                <p class="share-label">Share this link with the verifier:</p>
                 <div class="share-row">
-                    <input id="proof-link-value" type="text" readonly value="${escAttr(proofLink)}" />
+                    <input type="text" readonly value="${escAttr(link)}" />
                     <button id="copy-proof-link" class="btn-primary btn-sm">Copy</button>
                 </div>
             </div>
         </div>`;
-
-    q('#copy-proof-link').addEventListener('click', () => {
-        navigator.clipboard.writeText(proofLink).then(() => {
-            const btn = q<HTMLButtonElement>('#copy-proof-link');
-            btn.textContent = 'Copied!';
-            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-        });
-    });
+    q('#copy-proof-link').addEventListener('click', () => copyToClipboard(link, '#copy-proof-link'));
 }
 
 // ── VERIFY TAB ────────────────────────────────────────────────────────────────
 
-function handleVerifyProof(): void {
-    const input = (q<HTMLTextAreaElement>('#verify-input')).value.trim();
-    if (!input) { showStatus('Paste a proof link or encoded proof.', 'warning'); return; }
-
-    let proof: MidnightProof;
-
-    try {
-        // Try URL fragment format: ...#verify/<encoded>
-        if (input.includes('#verify/')) {
-            const encoded = input.split('#verify/')[1]?.split(/[&?]/)[0] ?? '';
-            proof = deserializeProof(encoded);
-        } else if (input.startsWith('{')) {
-            // Raw JSON
-            proof = JSON.parse(input) as MidnightProof;
-        } else {
-            // Base64-encoded
-            proof = deserializeProof(input);
-        }
-    } catch {
-        showStatus('Could not parse the proof. Make sure you pasted the full link.', 'error');
+async function handleVerifyClick(): Promise<void> {
+    const input = q<HTMLTextAreaElement>('#verify-input').value.trim();
+    if (!input) { showStatus('Paste a proof link first.', 'warning'); return; }
+    const parsed = parseShareInput(input);
+    if (!parsed || parsed.kind !== 'verify') {
+        showStatus('That does not look like a proof link (expected …#verify/…).', 'error');
         return;
     }
-
-    const result = verifyProof(proof);
-    displayVerifyResult(result, proof);
+    await runVerify(parsed.payload);
 }
 
-function displayVerifyResult(result: VerificationResult, proof: MidnightProof): void {
+async function runVerify(payload: VerifyLinkPayload): Promise<void> {
     const container = q('#verify-result');
     container.classList.remove('hidden');
+    container.innerHTML = `
+        <div class="proof-generating">
+            <div class="zk-spinner"></div>
+            <p class="proof-gen-label">Querying the Midnight indexer…</p>
+        </div>`;
+    try {
+        const result = await verifyClaimOnChain(payload);
+        renderVerifyResult(result, payload);
+    } catch (err) {
+        container.innerHTML = `<div class="verify-result-card proof-invalid"><div class="verify-error">${escHtml(friendlyError(err))}</div></div>`;
+    }
+}
 
-    const schema = SCHEMAS[result.schemaType];
-    const date   = new Date(result.timestamp).toLocaleString();
-
-    const paramsHtml = Object.entries(result.claimParams).map(([k, v]) =>
-        `<div class="proof-detail"><span class="proof-detail-label">${escHtml(k)}</span><span>${escHtml(String(v))}</span></div>`
-    ).join('');
+function renderVerifyResult(result: OnChainVerificationResult, payload: VerifyLinkPayload): void {
+    const container = q('#verify-result');
+    const checksHtml = result.checks.map(c => `
+        <div class="mid-step ${c.ok ? 'done' : ''}" style="${c.ok ? '' : 'color:#ef4444;'}">
+            ${c.ok ? '✅' : '❌'} ${escHtml(c.label)}${c.detail ? ` <span class="mono" style="opacity:.7; font-size:.85em;">· ${escHtml(c.detail)}</span>` : ''}
+        </div>`).join('');
 
     container.innerHTML = `
-        <div class="verify-result-card ${result.valid && result.satisfiesClaim ? 'proof-pass' : result.valid ? 'proof-fail' : 'proof-invalid'}">
+        <div class="verify-result-card ${result.valid ? 'proof-pass' : 'proof-fail'}">
             <div class="verify-header">
-                <div class="verify-icon">
-                    ${result.valid ? (result.satisfiesClaim ? '✅' : '❌') : '⛔'}
-                </div>
+                <div class="verify-icon">${result.valid ? '✅' : '❌'}</div>
                 <div>
-                    <div class="verify-verdict ${result.valid ? (result.satisfiesClaim ? 'verdict-pass' : 'verdict-fail') : 'verdict-invalid'}">
-                        ${result.valid ? (result.satisfiesClaim ? 'CLAIM VERIFIED' : 'CLAIM NOT MET') : 'PROOF INVALID'}
+                    <div class="verify-verdict ${result.valid ? 'verdict-pass' : 'verdict-fail'}">
+                        ${result.valid ? 'CLAIM VERIFIED ON-CHAIN' : 'VERIFICATION FAILED'}
                     </div>
-                    <div class="verify-summary">${escHtml(result.summary)}</div>
+                    <div class="verify-summary">${escHtml(result.description)}</div>
                 </div>
             </div>
 
-            ${result.valid ? `
-            <div class="verify-details">
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Document Type</span>
-                    <span>${schema?.icon ?? ''} ${escHtml(schema?.label ?? result.schemaType)}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Claim</span>
-                    <span>${escHtml(result.claimDescription)}</span>
-                </div>
-                ${paramsHtml}
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Prover</span>
-                    <span class="mono">${escHtml(formatAddress(result.ownerAddress))}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Generated</span>
-                    <span>${escHtml(date)}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Proof ID</span>
-                    <span class="mono">${escHtml(result.proofId)}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Contract</span>
-                    <span class="mono">${escHtml(result.contractId)}</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Nullifier</span>
-                    <span class="mono truncate">${proof.nullifier.slice(0, 24)}…</span>
-                </div>
-                <div class="proof-detail">
-                    <span class="proof-detail-label">Network</span>
-                    <span class="mono">${escHtml(proof.networkVersion)}</span>
-                </div>
-                ${proof.expiresAt ? `<div class="proof-detail">
-                    <span class="proof-detail-label">Expires</span>
-                    <span>${new Date(proof.expiresAt).toLocaleString()}</span>
-                </div>` : ''}
-            </div>` : `<div class="verify-error">${escHtml(result.error ?? 'Unknown error')}</div>`}
+            <div class="midnight-steps" style="margin-top:1rem;">${checksHtml}</div>
+
+            <div class="verify-details" style="margin-top:1rem;">
+                ${payload.identity ? `<div class="proof-detail"><span class="proof-detail-label">Student</span><span>${escHtml(payload.identity.name)} (${escHtml(payload.identity.id)})</span></div>` : ''}
+                <div class="proof-detail"><span class="proof-detail-label">Registry</span><span class="mono truncate" title="${escAttr(payload.contractAddress)}">${escHtml(payload.contractAddress.slice(0, 26))}…</span></div>
+                ${result.cascadeId ? `<div class="proof-detail"><span class="proof-detail-label">Document</span><span>Lumera Cascade action #${escHtml(result.cascadeId)} (encrypted)</span></div>` : ''}
+                ${payload.txHash ? `<div class="proof-detail"><span class="proof-detail-label">Proof Tx</span><span class="mono truncate" title="${escAttr(payload.txHash)}">${escHtml(payload.txHash.slice(0, 26))}…</span></div>` : ''}
+                <div class="proof-detail"><span class="proof-detail-label">Network</span><span>Midnight ${escHtml(MIDNIGHT_NETWORK_ID)} · checked live via indexer</span></div>
+            </div>
 
             <div class="verify-disclaimer">
-                🌙 Verified on Midnight Protocol (Simulation — ${escHtml(proof.networkVersion)})
+                🌙 Verified against the Midnight ${escHtml(MIDNIGHT_NETWORK_ID)} ledger — the document itself stays encrypted on Lumera Cascade.
             </div>
         </div>`;
 }
@@ -832,77 +911,150 @@ function displayVerifyResult(result: VerificationResult, proof: MidnightProof): 
 
 function renderHistory(): void {
     const container = q('#proof-history-container');
-    const records   = listProofs();
-
+    const records = listProofHistory();
     if (records.length === 0) {
         container.innerHTML = `<div class="empty-state"><div class="empty-icon">📋</div><p>No proofs generated yet.</p></div>`;
         return;
     }
-
-    container.innerHTML = records.map(r => buildHistoryRow(r)).join('');
+    container.innerHTML = records.map(r => `
+        <div class="history-row">
+            <div class="history-left">
+                <span class="history-schema-icon" style="color:#6366f1">🔐</span>
+                <div class="history-meta">
+                    <div class="history-title">${escHtml(r.description)}</div>
+                    <div class="history-sub">${escHtml(r.certTitle)} · ${new Date(r.when).toLocaleString()}</div>
+                    <div class="history-proofid mono" title="${escAttr(r.txHash)}">${escHtml(r.txHash.slice(0, 30))}…</div>
+                </div>
+            </div>
+            <div class="history-right">
+                <button class="btn-ghost btn-xs" data-action="copy-link" data-link="${escAttr(r.link)}">Copy Link</button>
+                <button class="btn-ghost btn-xs" data-action="delete-proof" data-tx="${escAttr(r.txHash)}">🗑</button>
+            </div>
+        </div>`).join('');
 
     container.querySelectorAll<HTMLButtonElement>('[data-action="copy-link"]').forEach(btn => {
         btn.addEventListener('click', () => {
-            const link = btn.dataset.link!;
-            navigator.clipboard.writeText(link).then(() => {
+            void navigator.clipboard.writeText(btn.dataset.link!).then(() => {
                 btn.textContent = 'Copied!';
                 setTimeout(() => { btn.textContent = 'Copy Link'; }, 2000);
             });
         });
     });
-
     container.querySelectorAll<HTMLButtonElement>('[data-action="delete-proof"]').forEach(btn => {
         btn.addEventListener('click', () => {
-            deleteProof(btn.dataset.proofid!);
+            removeProofHistory(btn.dataset.tx!);
             renderHistory();
         });
     });
 }
 
-function buildHistoryRow(r: ProofRecord): string {
-    const schema  = getSchema(r.proof.schemaType);
-    const date    = new Date(r.generatedAt).toLocaleString();
-    const verdict = r.proof.satisfiesClaim;
+// ── SETTINGS MODAL ────────────────────────────────────────────────────────────
 
-    return `
-        <div class="history-row">
-            <div class="history-left">
-                <span class="history-schema-icon" style="color: ${schema.accentColor}">${schema.icon}</span>
-                <div class="history-meta">
-                    <div class="history-title">${escHtml(r.proof.claimDescription)}</div>
-                    <div class="history-sub">${escHtml(r.documentTitle)} · ${escHtml(date)}</div>
-                    <div class="history-proofid mono">${r.proof.proofId}</div>
-                </div>
-            </div>
-            <div class="history-right">
-                <span class="badge ${verdict ? 'badge-success' : 'badge-error'}">${verdict ? '✅ Pass' : '❌ Fail'}</span>
-                <button class="btn-ghost btn-xs" data-action="copy-link" data-link="${escAttr(r.proofLink)}">Copy Link</button>
-                <button class="btn-ghost btn-xs" data-action="delete-proof" data-proofid="${r.proof.proofId}">🗑</button>
-            </div>
-        </div>`;
+function openSettings(): void {
+    q('#settings-modal').classList.remove('hidden');
+    q('#settings-overlay').classList.remove('hidden');
+    q<HTMLInputElement>('#contract-address-input').value = getContractAddress();
+    void renderSettingsInfo();
 }
 
-// ── Status messages ───────────────────────────────────────────────────────────
+function closeSettings(): void {
+    q('#settings-modal').classList.add('hidden');
+    q('#settings-overlay').classList.add('hidden');
+}
+
+function handleSaveContractAddress(): void {
+    const addr = q<HTMLInputElement>('#contract-address-input').value.trim();
+    setContractAddress(addr);
+    showStatus(addr ? 'Registry address saved.' : 'Registry address cleared.', 'success');
+    void renderSettingsInfo();
+}
+
+async function handleDeployRegistry(): Promise<void> {
+    if (!providers) {
+        showStatus('Connect the 1AM wallet first — the deploying wallet becomes the school (issuer).', 'warning');
+        return;
+    }
+    if (!confirm('Deploy a new certificate registry on Midnight preprod? Your wallet becomes its issuer.')) return;
+    const btn = q<HTMLButtonElement>('#deploy-registry-button');
+    btn.disabled = true;
+    btn.textContent = '🚀 Deploying… (~10–30s)';
+    try {
+        const reg = await CertificateRegistry.deploy(providers);
+        registry = reg;
+        setContractAddress(reg.address);
+        registry = reg; // setContractAddress clears the cache; keep the fresh instance
+        q<HTMLInputElement>('#contract-address-input').value = reg.address;
+        showStatus(`✅ Registry deployed at ${reg.address.slice(0, 20)}… — you are its issuer.`, 'success', 9000);
+        await renderSettingsInfo();
+    } catch (err) {
+        showStatus(`Deploy failed: ${friendlyError(err)}`, 'error', 12000);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🚀 Deploy New Registry';
+    }
+}
+
+async function renderSettingsInfo(): Promise<void> {
+    const info = q('#settings-info');
+    const addr = getContractAddress();
+    const wallet = isWalletConnected() ? formatAddress(getShieldedAddress() ?? '') : 'not connected';
+    info.innerHTML = `
+        <div class="proof-detail"><span class="proof-detail-label">Midnight network</span><span>${escHtml(MIDNIGHT_NETWORK_ID)}</span></div>
+        <div class="proof-detail"><span class="proof-detail-label">1AM wallet</span><span class="mono">${escHtml(wallet)}</span></div>
+        <div class="proof-detail"><span class="proof-detail-label">Registry</span><span class="mono truncate">${escHtml(addr || '— none configured —')}</span></div>
+        <div class="proof-detail"><span class="proof-detail-label">cascade-api</span><span class="mono">${escHtml(CASCADE_API_BASE)}</span></div>
+        <div class="proof-detail"><span class="proof-detail-label">Cascade status</span><span id="cascade-health-cell">checking…</span></div>
+        <div class="proof-detail"><span class="proof-detail-label">Degree levels</span><span>${DEGREE_LEVELS.join(' · ')}</span></div>`;
+    try {
+        const h = await cascadeHealth();
+        const cell = document.getElementById('cascade-health-cell');
+        if (cell) {
+            cell.textContent = h.ok
+                ? `✅ up · ${h.chainId} · uploader balance ${(h.ulumeBalance / 1e6).toFixed(2)} LUME${h.warning ? ' ⚠️' : ''}`
+                : '❌ unhealthy';
+        }
+    } catch {
+        const cell = document.getElementById('cascade-health-cell');
+        if (cell) cell.textContent = '❌ unreachable';
+    }
+}
+
+// ── Status / helpers ──────────────────────────────────────────────────────────
 
 let _statusTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function showStatus(
     msg:  string,
     type: 'success' | 'error' | 'warning' | 'info' = 'info',
-    durationMs = 5000
+    durationMs = 5000,
 ): void {
     const el = q('#status-message');
     el.textContent = msg;
-    el.className   = `status-message status-${type}`;
+    el.className = `status-message status-${type}`;
     el.classList.remove('hidden');
-
     if (_statusTimer) clearTimeout(_statusTimer);
     if (durationMs > 0) {
         _statusTimer = setTimeout(() => el.classList.add('hidden'), durationMs);
     }
 }
 
-// ── DOM helpers ───────────────────────────────────────────────────────────────
+/** Extract a readable message from midnight-js / circuit errors. */
+function friendlyError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Circuit assert failures arrive as "...failed assert: <our message>"
+    const assertMatch = msg.match(/failed assert:?\s*(.+)/i);
+    if (assertMatch) return `Contract rejected the transaction: ${assertMatch[1]}`;
+    return msg.length > 400 ? `${msg.slice(0, 400)}…` : msg;
+}
+
+function copyToClipboard(text: string, btnSelector: string): void {
+    void navigator.clipboard.writeText(text).then(() => {
+        const btn = q<HTMLButtonElement>(btnSelector);
+        const prev = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = prev; }, 2000);
+    });
+}
 
 function q<T extends Element = Element>(selector: string): T {
     const el = document.querySelector<T>(selector);

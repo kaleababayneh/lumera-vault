@@ -1,0 +1,163 @@
+// Lumera Vault — Academic Certificate Registry on Midnight
+//
+// A school (registered issuer) anchors certificate commitments together with
+// their Lumera Cascade storage pointer on the public ledger. Students later
+// prove selective claims about their certificate inside ZK circuits without
+// revealing the underlying fields. A claim record only appears in
+// `claimProofs` when every assert held inside the circuit, so the existence
+// of a record under a reproducible proof key IS the proof.
+pragma language_version >= 0.20;
+
+import CompactStandardLibrary;
+
+// Encoded academic certificate. String fields arrive as 32-byte hashes
+// (BLAKE2b of the normalized string, computed app-side); numbers are
+// range-bounded unsigned ints so circuits can compare them.
+export struct AcademicCert {
+  institutionHash: Bytes<32>,
+  studentIdHash: Bytes<32>,
+  degreeLevel: Uint<8>,
+  fieldOfStudyHash: Bytes<32>,
+  graduationYear: Uint<16>,
+  accredited: Boolean,
+  gpaTimes100: Uint<16>,
+  salt: Bytes<32>,
+}
+
+export struct CertificateRecord {
+  cascadeId: Opaque<"string">,
+  revoked: Boolean,
+}
+
+export struct ClaimRecord {
+  claimKind: Uint<8>,
+  numericParam: Uint<32>,
+  hashParam: Bytes<32>,
+  studentIdHash: Bytes<32>,
+}
+
+export ledger issuers: Set<Bytes<32>>;
+export ledger certificates: Map<Bytes<32>, CertificateRecord>;
+export ledger claimProofs: Map<Bytes<32>, ClaimRecord>;
+
+// Student's full certificate, read from local private state at proof time.
+witness certificateWitness(): AcademicCert;
+
+// The deployer becomes the first registered issuer (the school).
+constructor() {
+  issuers.insert(disclose(entityId(ownPublicKey().bytes)));
+}
+
+// Stable on-chain identity derived from a wallet's coin public key.
+export circuit entityId(pk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "lumera-vault:entity:"), pk]);
+}
+
+// Commitment binding all certificate fields + salt.
+export circuit computeCommitment(cert: AcademicCert): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([
+    pad(32, "lumera-vault:cert:"),
+    persistentHash<AcademicCert>(cert)
+  ]);
+}
+
+// Key under which a claim proof is recorded; reproducible by verifiers.
+export circuit computeProofKey(
+  commitment: Bytes<32>,
+  claimKind: Uint<8>,
+  numericParam: Uint<32>,
+  hashParam: Bytes<32>
+): Bytes<32> {
+  const claimEnc = persistentHash<Vector<2, Field>>([claimKind as Field, numericParam as Field]);
+  return persistentHash<Vector<4, Bytes<32>>>([
+    pad(32, "lumera-vault:claim:"),
+    commitment,
+    claimEnc,
+    hashParam
+  ]);
+}
+
+circuit requireIssuer(): [] {
+  assert(issuers.member(disclose(entityId(ownPublicKey().bytes))), "Caller is not a registered issuer");
+}
+
+// School-only: anchor a certificate on-chain. The Cascade action id is
+// stored alongside the hash so the document pointer lives on Midnight.
+export circuit issueCertificate(commitment: Bytes<32>, cascadeId: Opaque<"string">): [] {
+  requireIssuer();
+  const c = disclose(commitment);
+  assert(!certificates.member(c), "Certificate already registered");
+  certificates.insert(c, CertificateRecord { cascadeId: disclose(cascadeId), revoked: false });
+}
+
+// School-only: mark a certificate revoked (Cascade pointer is preserved).
+export circuit revokeCertificate(commitment: Bytes<32>): [] {
+  requireIssuer();
+  const c = disclose(commitment);
+  assert(certificates.member(c), "Certificate is not registered");
+  const rec = certificates.lookup(c);
+  certificates.insert(c, CertificateRecord { cascadeId: rec.cascadeId, revoked: true });
+}
+
+// School-only: register another issuer wallet by its entity id.
+export circuit addIssuer(issuerEntityId: Bytes<32>): [] {
+  requireIssuer();
+  issuers.insert(disclose(issuerEntityId));
+}
+
+// Shared validation: the witness certificate must hash to a registered,
+// unrevoked commitment. Returns the (disclosed) commitment.
+circuit requireValidCert(cert: AcademicCert): Bytes<32> {
+  const commitment = disclose(computeCommitment(cert));
+  assert(certificates.member(commitment), "Certificate is not registered on-chain");
+  assert(!certificates.lookup(commitment).revoked, "Certificate has been revoked");
+  return commitment;
+}
+
+circuit recordClaim(
+  commitment: Bytes<32>,
+  claimKind: Uint<8>,
+  numericParam: Uint<32>,
+  hashParam: Bytes<32>,
+  studentIdHash: Bytes<32>
+): [] {
+  const key = computeProofKey(commitment, claimKind, numericParam, hashParam);
+  claimProofs.insert(key, ClaimRecord {
+    claimKind: claimKind,
+    numericParam: numericParam,
+    hashParam: hashParam,
+    studentIdHash: studentIdHash
+  });
+}
+
+// Claim 1 — "holds a degree in <field>" (field matched by normalized hash).
+export circuit proveDegreeInField(requiredFieldHash: Bytes<32>): [] {
+  const cert = certificateWitness();
+  const commitment = requireValidCert(cert);
+  assert(cert.fieldOfStudyHash == requiredFieldHash, "Certificate field of study does not match");
+  recordClaim(commitment, 1, 0, disclose(requiredFieldHash), disclose(cert.studentIdHash));
+}
+
+// Claim 2 — "graduated from an accredited institution".
+export circuit proveAccredited(): [] {
+  const cert = certificateWitness();
+  const commitment = requireValidCert(cert);
+  assert(cert.accredited, "Certificate institution is not accredited");
+  recordClaim(commitment, 2, 0, default<Bytes<32>>, disclose(cert.studentIdHash));
+}
+
+// Claim 3 — "degree level is at least <minLevel>".
+export circuit proveDegreeLevelAtLeast(minLevel: Uint<8>): [] {
+  const cert = certificateWitness();
+  const commitment = requireValidCert(cert);
+  assert(cert.degreeLevel >= minLevel, "Degree level is below the requested minimum");
+  recordClaim(commitment, 3, disclose(minLevel as Uint<32>), default<Bytes<32>>, disclose(cert.studentIdHash));
+}
+
+// Claim 4 — "GPA strictly above <threshold/100>".
+export circuit proveGpaAbove(thresholdTimes100: Uint<16>): [] {
+  const cert = certificateWitness();
+  const commitment = requireValidCert(cert);
+  assert(cert.gpaTimes100 > thresholdTimes100, "GPA does not exceed the requested threshold");
+  recordClaim(commitment, 4, disclose(thresholdTimes100 as Uint<32>), default<Bytes<32>>, disclose(cert.studentIdHash));
+}

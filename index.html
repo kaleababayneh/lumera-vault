@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lumera Vault — Notarize once, prove forever</title>
-  <meta name="description" content="ZK-verified document vault. Encrypt your credentials on Lumera Cascade and prove selective claims via Midnight ZK proofs — without ever revealing the underlying document." />
+  <title>Lumera Vault — Issue once, prove forever</title>
+  <meta name="description" content="Academic certificates stored permanently on Lumera Cascade, anchored on Midnight, proven with real zero-knowledge circuits via the 1AM wallet." />
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,26 +21,27 @@
   <!-- ─── Header ─────────────────────────────────────────────────────────── -->
   <header class="header">
     <div class="header-brand">
-      <div class="brand-logo">🔐</div>
+      <div class="brand-logo">🎓</div>
       <div>
         <h1>Lumera Vault</h1>
-        <p>Notarize once, prove forever</p>
+        <p>Issue once, prove forever</p>
       </div>
     </div>
     <div class="header-badges">
-      <span class="tech-badge midnight">🌙 Midnight ZK</span>
-      <span class="tech-badge cascade">⛓ Cascade Storage</span>
+      <span class="tech-badge midnight">🌙 Midnight · preprod</span>
+      <span class="tech-badge cascade">⛓ Lumera Cascade</span>
+      <button id="open-settings" class="btn-ghost btn-sm" title="Registry settings">⚙️</button>
     </div>
   </header>
 
   <!-- ─── Wallet section ─────────────────────────────────────────────────── -->
   <section class="wallet-section">
-    <button id="wallet-button" class="btn-primary">Connect Keplr</button>
+    <button id="wallet-button" class="btn-primary">Connect 1AM Wallet</button>
     <span id="wallet-status"></span>
-    <div id="dust-balance" class="dust-balance hidden">
-      <span class="dust-icon">🌙</span>
-      <strong id="dust-amount">1000</strong>
-      <span>DUST</span>
+    <div id="gasless-badge" class="dust-balance hidden" title="ProofStation sponsors all transaction fees">
+      <span class="dust-icon">⚡</span>
+      <strong>Gasless</strong>
+      <span>· fees sponsored</span>
     </div>
   </section>
 
@@ -48,104 +49,156 @@
   <div id="status-message" class="status-message hidden"></div>
 
   <!-- ─── Tab nav ────────────────────────────────────────────────────────── -->
-  <nav class="tab-nav disabled" id="tab-nav">
-    <button class="tab-button active" data-tab="vault">🗄️ My Vault</button>
-    <button class="tab-button" data-tab="prove">🔐 Generate Proof</button>
+  <nav class="tab-nav" id="tab-nav">
+    <button class="tab-button active" data-tab="issue">🏫 Issue</button>
+    <button class="tab-button" data-tab="certs">🎓 My Certificates</button>
+    <button class="tab-button" data-tab="prove">🔐 Prove</button>
     <button class="tab-button" data-tab="verify">✅ Verify</button>
     <button class="tab-button" data-tab="history">📋 History</button>
   </nav>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       VAULT TAB
+       ISSUE TAB (school)
        ══════════════════════════════════════════════════════════════════════ -->
-  <section id="tab-vault" class="tab-content active">
+  <section id="tab-issue" class="tab-content active">
     <div class="section">
       <div class="section-header">
         <div>
-          <h2>🗄️ My Vault</h2>
-          <p class="section-description">Documents are encrypted end-to-end and stored permanently on Cascade.</p>
-        </div>
-        <button id="open-upload-modal" class="btn-primary" disabled>+ Upload Document</button>
-      </div>
-      <div id="vault-documents-container">
-        <div class="empty-state">
-          <div class="empty-icon">🔒</div>
-          <p>Your vault is empty.</p>
-          <p class="empty-sub">Connect your wallet and upload a document to get started.</p>
+          <h2>🏫 Issue a Certificate</h2>
+          <p class="section-description">
+            The certificate document is encrypted and inscribed permanently on
+            <strong>Lumera Cascade</strong>; its commitment hash + Cascade pointer are
+            anchored on <strong>Midnight</strong> by the school's wallet.
+          </p>
         </div>
       </div>
+
+      <div id="issue-form-panel">
+        <div id="issue-fields-form"></div>
+        <div class="upload-actions">
+          <button id="issue-button" class="btn-primary">🏫 Issue Certificate</button>
+        </div>
+      </div>
+
+      <div id="issue-progress-panel" class="hidden">
+        <div class="upload-step-header">Issuing certificate…</div>
+        <div class="progress-bar"><div id="issue-progress-fill" class="progress-fill" style="width:0%"></div></div>
+        <p id="issue-progress-text" class="progress-label">Initializing…</p>
+      </div>
+
+      <div id="issue-result-panel" class="hidden"></div>
+
+      <div class="section-header" style="margin-top:2rem;">
+        <h2>📜 Issued by this school</h2>
+      </div>
+      <div id="issued-list-container"></div>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       PROVE TAB
+       MY CERTIFICATES TAB (student)
+       ══════════════════════════════════════════════════════════════════════ -->
+  <section id="tab-certs" class="tab-content">
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <h2>🎓 My Certificates</h2>
+          <p class="section-description">
+            Paste the certificate link your school gave you. The document is fetched
+            from Cascade and decrypted locally — no wallet needed for this step.
+          </p>
+        </div>
+      </div>
+
+      <div class="verify-form">
+        <textarea id="import-input" placeholder="Paste the certificate link (…#cert/eyJ…)"></textarea>
+        <button id="import-button" class="btn-primary" style="align-self:flex-start">📥 Import Certificate</button>
+      </div>
+      <div id="import-progress" class="hidden">
+        <div class="progress-bar"><div id="import-progress-fill" class="progress-fill" style="width:0%"></div></div>
+        <p id="import-progress-text" class="progress-label">Fetching from Cascade…</p>
+      </div>
+
+      <div id="student-certs-container" style="margin-top:1.5rem;"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       PROVE TAB (student)
        ══════════════════════════════════════════════════════════════════════ -->
   <section id="tab-prove" class="tab-content">
     <div class="section">
       <div class="section-header">
         <div>
-          <h2>🔐 Generate ZK Proof</h2>
-          <p class="section-description">Prove a claim about your document without revealing it.</p>
+          <h2>🔐 Prove a Claim</h2>
+          <p class="section-description">
+            A real Midnight ZK circuit checks your certificate against the on-chain
+            registry — the verifier learns the claim verdict, nothing else.
+          </p>
         </div>
       </div>
 
-      <!-- Step 1: Select document -->
       <div id="prove-step-1">
-        <div class="prove-step-header">Step 1 — Select Document from Vault</div>
-        <div id="prove-documents-container"></div>
+        <div class="prove-step-header">Step 1 — Select Certificate</div>
+        <div id="prove-certs-container"></div>
       </div>
 
-      <!-- Step 2: Select claim -->
       <div id="prove-step-2" class="hidden">
         <div class="prove-breadcrumb">
-          <span>Document:</span>
-          <span id="prove-selected-doc" class="crumb-value"></span>
+          <span>Certificate:</span>
+          <span id="prove-selected-cert" class="crumb-value"></span>
         </div>
         <div class="prove-step-header">Step 2 — Choose Claim to Prove</div>
         <div id="prove-claims-container"></div>
         <button class="btn-ghost prove-step-back" data-to="1">← Back</button>
       </div>
 
-      <!-- Step 3: Configure parameters -->
       <div id="prove-step-3" class="hidden">
         <div class="prove-breadcrumb">
-          <span>Document:</span>
-          <span id="prove-selected-doc-3" class="crumb-value"></span>
+          <span>Certificate:</span>
+          <span id="prove-selected-cert-3" class="crumb-value"></span>
           <span class="crumb-sep">›</span>
           <span id="prove-selected-claim" class="crumb-value"></span>
         </div>
-        <div class="prove-step-header">Step 3 — Configure Claim Parameters</div>
+        <div class="prove-step-header">Step 3 — Claim Parameters</div>
         <div id="prove-params-form"></div>
+        <div class="form-group" style="margin-top:0.75rem;">
+          <label class="checkbox-label">
+            <input type="checkbox" id="prove-disclose-identity" checked />
+            <span>Disclose my name & student ID to the verifier (binds the proof to you)</span>
+          </label>
+        </div>
         <div style="display:flex; gap:0.75rem; margin-top:1rem;">
           <button class="btn-ghost prove-step-back" data-to="2">← Back</button>
           <button id="generate-proof-button" class="btn-primary">⚡ Generate ZK Proof</button>
         </div>
       </div>
 
-      <!-- Step 4: Result -->
       <div id="prove-step-4" class="hidden">
         <div id="prove-result-container"></div>
         <div style="margin-top:1rem;">
-          <button class="btn-ghost prove-step-back" data-to="1">← Generate Another</button>
+          <button class="btn-ghost prove-step-back" data-to="1">← Prove Another</button>
         </div>
       </div>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       VERIFY TAB
+       VERIFY TAB (anyone — no wallet)
        ══════════════════════════════════════════════════════════════════════ -->
   <section id="tab-verify" class="tab-content">
     <div class="section">
       <div class="section-header">
         <div>
           <h2>✅ Verify a Proof</h2>
-          <p class="section-description">Paste a proof link or encoded proof — no wallet required.</p>
+          <p class="section-description">
+            Checks the claim directly against the Midnight indexer — no wallet required.
+          </p>
         </div>
       </div>
       <div class="verify-form">
-        <textarea id="verify-input" placeholder="Paste the proof link (e.g. http://…#verify/eyJ…) or the raw encoded proof string"></textarea>
-        <button id="verify-button" class="btn-primary" style="align-self:flex-start">🔍 Verify Proof</button>
+        <textarea id="verify-input" placeholder="Paste the proof link (…#verify/eyJ…)"></textarea>
+        <button id="verify-button" class="btn-primary" style="align-self:flex-start">🔍 Verify On-Chain</button>
       </div>
       <div id="verify-result" class="hidden"></div>
     </div>
@@ -170,37 +223,26 @@
 
 </div><!-- /.app -->
 
-<!-- ─── Upload Modal Overlay ────────────────────────────────────────────── -->
-<div id="upload-overlay" class="modal-overlay hidden"></div>
-
-<!-- ─── Upload Modal ────────────────────────────────────────────────────── -->
-<div id="upload-modal" class="modal hidden">
+<!-- ─── Settings Modal ──────────────────────────────────────────────────── -->
+<div id="settings-overlay" class="modal-overlay hidden"></div>
+<div id="settings-modal" class="modal hidden">
   <div class="modal-content">
     <div class="modal-header">
-      <h3>Upload Document</h3>
-      <button id="close-upload-modal" class="btn-close" aria-label="Close">✕</button>
+      <h3>⚙️ Registry Settings</h3>
+      <button id="close-settings" class="btn-close" aria-label="Close">✕</button>
     </div>
 
-    <!-- Step 1: Schema selection -->
-    <div id="upload-step-1">
-      <div class="upload-step-header">Select Document Type</div>
-      <div id="schema-grid" class="schema-grid"></div>
+    <div class="form-group">
+      <label for="contract-address-input">Registry contract address (Midnight preprod)</label>
+      <input type="text" id="contract-address-input" placeholder="0200…" class="mono" />
+      <span class="field-hint">Students and verifiers must use the same registry as the school.</span>
+    </div>
+    <div style="display:flex; gap:0.75rem; margin:0.5rem 0 1.25rem;">
+      <button id="save-contract-address" class="btn-primary btn-sm">Save Address</button>
+      <button id="deploy-registry-button" class="btn-ghost btn-sm">🚀 Deploy New Registry</button>
     </div>
 
-    <!-- Step 2: Fields form -->
-    <div id="upload-step-2" class="hidden">
-      <div class="upload-step-header">
-        <span id="upload-step2-schema-label"></span>
-      </div>
-      <div id="document-fields-form"></div>
-    </div>
-
-    <!-- Step 3: Progress -->
-    <div id="upload-step-3" class="hidden">
-      <div class="upload-step-header">Encrypting & Uploading…</div>
-      <div class="progress-bar"><div id="upload-progress-fill" class="progress-fill" style="width:0%"></div></div>
-      <p id="upload-progress-text" class="progress-label">Initializing…</p>
-    </div>
+    <div id="settings-info" class="verify-details"></div>
   </div>
 </div>
 

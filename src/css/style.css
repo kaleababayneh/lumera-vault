@@ -1004,3 +1004,7 @@ button { font-family: var(--font-sans); cursor: pointer; transition: all 0.3s ea
   #vault-documents-container { grid-template-columns: 1fr; }
   .history-right   { width: 100%; justify-content: flex-start; }
 }
+
+/* ── v2 additions ──────────────────────────────────────────────────────────── */
+.doc-meta { flex: 1; min-width: 0; }
+.doc-detail-mono span:last-child { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; }

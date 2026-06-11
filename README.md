@@ -1,72 +1,66 @@
-# Lumera Vault 🔐
+# Lumera Vault 🎓
 
-> **Notarize once, prove forever.**
+> **Issue once, prove forever.**
 
-A ZK-verified document vault built on **Lumera's Cascade** permanent decentralized storage and a production-realistic simulation of the **Midnight** zero-knowledge proof protocol.
+A school issues an academic certificate; the encrypted document lives **permanently on
+[Lumera Cascade](https://lumera.io)**, its commitment hash + Cascade pointer are anchored
+on **[Midnight](https://midnight.network) (preprod)**, and the student later proves
+selective claims about it with **real ZK circuits** — without revealing the certificate.
 
----
-
-## What it does
-
-Users upload sensitive documents (academic credentials, income statements, medical records, property deeds, identity documents), encrypted end-to-end and stored permanently on Lumera Cascade. They can then generate **Midnight ZK proofs** that prove specific *claims* about their documents — without ever revealing the underlying document.
-
-### Example flows
-
-| Document | Claim proven | What the verifier learns |
-|---|---|---|
-| University diploma | "Has a Computer Science degree" | ✅ / ❌ — nothing else |
-| Income statement | "Annual income exceeds $60,000" | ✅ / ❌ — exact salary stays private |
-| Medical record | "Vaccinated for COVID-19" | ✅ / ❌ — full history stays private |
-| Property deed | "Property assessed above $200,000" | ✅ / ❌ — address/value stays private |
-| Passport | "Is 21 years of age or older" | ✅ / ❌ — date of birth stays private |
+No simulation: Compact contract compiled & deployed on Midnight preprod, real proofs via
+the [1AM wallet](https://1am.xyz)'s ProofStation (gasless — fees sponsored), and real
+permanent storage through [cascade-api](https://github.com/kaleababayneh/cascade-api)
+(no Keplr / Lumera wallet needed in the browser).
 
 ---
 
-## Architecture
+## How it works
 
 ```
-User → Fill document fields
-     → Encrypt (XChaCha20-Poly1305) with wallet-derived key
-     → Upload to Cascade (permanent, decentralized)
-     → Commitment hash stored with the action
-               ↓
-Midnight Compact contract (simulated) registers document schema
-               ↓
-User selects claim → fills parameters
-               ↓
-Midnight proof generated locally (Groth16 simulation):
-  • Witness hash = BLAKE2b(fields | claimType | params | salt)
-  • π_A, π_B, π_C = BLAKE2b(witnessHash | "ZK_GROTH16_Pi_*")
-  • Nullifier    = BLAKE2b(commitment | claimType | params)
-  • VK           = BLAKE2b("MIDNIGHT_CIRCUIT_VK:<schema>:<claim>:v1")
-  • verificationHash = BLAKE2b(π_A | π_C | verdict | nullifier | VK)
-               ↓
-Proof bundle encoded as URL-safe base64 → shareable link
-               ↓
-Verifier pastes link → structural integrity check passes → verdict displayed
+┌─ SCHOOL (1AM wallet) ──────────────────────────────────────────────┐
+│ fill certificate → encrypt (XChaCha20-Poly1305, random key)        │
+│   → POST cascade-api /upload          → action_id   (Lumera, perm) │
+│   → issueCertificate(commitment, action_id)         (Midnight tx)  │
+│   → hand student a link: #cert/<action_id + decryption key>        │
+└────────────────────────────────────────────────────────────────────┘
+┌─ STUDENT (1AM wallet) ─────────────────────────────────────────────┐
+│ paste link → GET cascade-api /download/{action_id} → decrypt local │
+│ pick claim (e.g. "GPA > 3.0") → prove* circuit:                    │
+│   witness = full certificate (never leaves device)                 │
+│   circuit asserts: commitment registered ∧ not revoked ∧ claim     │
+│   → ZK proof via ProofStation (~2–5 s, 0 fees)                     │
+│   → claim record lands on the Midnight ledger                      │
+│ → hand verifier a link: #verify/<claim + params (+ identity)>      │
+└────────────────────────────────────────────────────────────────────┘
+┌─ VERIFIER (no wallet) ─────────────────────────────────────────────┐
+│ paste link → query Midnight indexer:                               │
+│   recompute proofKey (pure circuit) → claimProofs.member(key) ✓    │
+│   certificate registered ✓ · not revoked ✓ · params match ✓        │
+│   identity (optional): recompute salted studentIdHash ✓            │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-### Midnight simulation vs real Midnight
+A claim record can **only** exist on the ledger if every `assert` held inside the ZK
+circuit, so `claimProofs.member(proofKey)` *is* the verification. The proof key is
+reproducible by anyone (`computeProofKey` is an exported pure circuit), which is what
+makes wallet-less verification possible.
 
-| Aspect | This app (simulation) | Real Midnight |
+### The contract (`contract/certificate.compact`)
+
+| Circuit | Caller | Purpose |
 |---|---|---|
-| Proof generation | BLAKE2b-derived Groth16-like points | Actual Groth16 over BLS12-377 |
-| Zero-knowledge | Computationally binding | Cryptographically zero-knowledge |
-| Verification | Hash consistency check | Bilinear pairing check |
-| Circuit definition | TypeScript switch/case | Compact language circuits |
-| Contract addresses | `mid1vault_*_v1` prefixes | On-chain Midnight addresses |
-| Network | Simulated | Midnight testnet / mainnet |
-| Privacy guarantee | UX demonstration | Mathematical ZK guarantee |
+| `issueCertificate(commitment, cascadeId)` | school | Anchor commitment + Cascade pointer |
+| `revokeCertificate(commitment)` | school | Mark revoked (pointer preserved) |
+| `addIssuer(entityId)` | school | Register another issuer wallet |
+| `proveDegreeInField(fieldHash)` | student | ZK: field of study matches |
+| `proveAccredited()` | student | ZK: institution accredited |
+| `proveDegreeLevelAtLeast(minLevel)` | student | ZK: degree level ≥ minimum |
+| `proveGpaAbove(threshold×100)` | student | ZK: GPA strictly above threshold |
+| `entityId / computeCommitment / computeProofKey` | anyone | **Pure** circuits — also callable from TS so app & circuit can never disagree on hashing |
 
----
-
-## Tech stack
-
-- **Lumera Cascade** — permanent, decentralized storage via `@lumera-protocol/sdk-js`
-- **Keplr** — wallet for signing and authentication on Lumera testnet
-- **libsodium** (`libsodium-wrappers-sumo`) — XChaCha20-Poly1305 encryption + BLAKE2b hashing
-- **TypeScript + Vite** — typed, fast build toolchain
-- **DUST token** — Midnight's privacy-native token (simulated balance, 1 DUST/proof)
+Certificate fields enter circuits as normalized BLAKE2b hashes / range-bounded ints;
+`salt` blinds the commitment; `studentIdHash` (salted) binds proofs to a person without
+putting any PII on-chain.
 
 ---
 
@@ -74,48 +68,61 @@ Verifier pastes link → structural integrity check passes → verdict displayed
 
 ### Prerequisites
 
-- [Keplr wallet](https://www.keplr.app/) browser extension
-- Node.js ≥ 18
+- Node.js ≥ 20, plus the [compact toolchain](https://docs.midnight.network):
+  `curl -fsSL https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | bash && compact update`
+- [1AM wallet](https://1am.xyz/install-beta) browser extension, set to **preprod**
+- A cascade-api key (see [api.lumera.help docs](https://github.com/kaleababayneh/cascade-api))
 
 ### Setup
 
 ```bash
-cp .env.example .env
-# Edit .env — set VITE_LUMESCOPE_API_BASE if available
-
+cp .env.example .env        # fill VITE_CASCADE_API_KEY (and VITE_CONTRACT_ADDRESS once deployed)
 npm install
-npm run dev
+npm run contract:compile    # compact compile + copy keys/zkir → public/
+npm run test                # contract simulator tests (no network needed)
+npm run dev                 # http://localhost:5173
 ```
 
-Open http://localhost:5173, connect Keplr (Lumera Testnet), then:
+### First run (one-time)
 
-1. **Upload** a document (fields are entered manually)
-2. **Generate Proof** — select document → select claim → fill parameters → copy link
-3. Share the proof link with a verifier
-4. **Verify** — verifier pastes the link → sees ✅ / ❌ result with no access to the document
-
----
-
-## Document schemas
-
-| Schema | Available claims |
-|---|---|
-| 🎓 Academic Credential | has_degree_in, graduated_from_accredited, degree_level_at_least, gpa_above |
-| 💰 Income Statement | income_above, is_employed, income_in_range, income_above_x_times_rent |
-| 🏥 Medical Record | vaccinated_for, no_known_allergies, allergy_free_of, medically_fit |
-| 🏠 Property Deed | is_property_owner, property_value_above, purchased_before |
-| 🪪 Identity Document | is_adult, age_above, nationality_is |
+1. Open the app, **Connect 1AM Wallet** (preprod).
+2. ⚙️ **Registry Settings → Deploy New Registry** — your wallet becomes the school/issuer.
+   Put the printed address into `.env` as `VITE_CONTRACT_ADDRESS` so students/verifiers
+   default to it (they can also set it in ⚙️).
+3. **Issue** tab: fill the certificate → it uploads to Cascade (30–60 s) and anchors on
+   Midnight → copy the `#cert/…` link for the student.
+4. As the student (any browser): **My Certificates** → paste link → import. **Prove** →
+   pick claim → ZK proof lands on-chain → copy the `#verify/…` link.
+5. As the verifier (no wallet): **Verify** → paste link → live checks against the
+   Midnight indexer.
 
 ---
 
-## Security notes
+## Privacy model
 
-- Document fields never leave the browser — only the encrypted ciphertext goes to Cascade
-- Proof generation runs entirely on-device; the plaintext witness is discarded after proof construction
-- Proof links are self-contained (no server required for verification)
-- In production, replace the BLAKE2b simulation with actual Midnight Compact circuits for full ZK guarantees
+- **On Cascade (public, permanent):** only XChaCha20-Poly1305 ciphertext. The key never
+  touches the backend — it travels inside the school→student link.
+- **On Midnight:** commitment (salt-blinded hash), Cascade action id, and — per proof —
+  the claim kind/params + salted `studentIdHash`. Issuing tx ↔ proof tx linkage is
+  public (same commitment); certificate *contents* are never derivable.
+- **Identity disclosure is student-controlled:** the verify link optionally carries
+  (name, id, idSalt); the verifier recomputes the salted hash and matches it against the
+  on-chain record. Omit it for anonymous proofs.
+- Future work: a MerkleTree-based membership proof would also hide *which* certificate a
+  proof refers to.
 
----
+## Notes & credits
+
+- Proof flow modeled on **[vaxzk](https://github.com/bochaco/vaxzk)** (MIT) — vaccination
+  certificates on Midnight; `src/midnight/in-memory-private-state.ts` and the simulator
+  test harness are adapted from it.
+- 1AM integration per the official AI reference: <https://1am.xyz/ai.txt> (dust-free:
+  ProofStation proves, balances and sponsors fees — users pay 0).
+- Storage via **cascade-api**'s public instance at `https://api.lumera.help`
+  (`VITE_CASCADE_API_BASE` to self-host). API keys are quota-capped bearer tokens; a
+  browser-exposed key is the documented pattern for demos — rotate if abused.
+- `npm run contract:compile` regenerates `contract/managed/` + `public/keys|zkir`
+  after any `.compact` change (compact compiler ≥ 0.31, language ≥ 0.20).
 
 ## License
 

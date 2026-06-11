@@ -1,22 +1,20 @@
 import { defineConfig } from 'vite';
-import { nodePolyfills } from 'vite-plugin-node-polyfills';
+import path from 'path';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
-import path from 'path';
+import nodePolyfills from '@rolldown/plugin-node-polyfills';
 
 export default defineConfig({
     plugins: [
         wasm(),
-        topLevelAwait(),
-        nodePolyfills({
-            protocolImports: true,
-            globals: {
-                Buffer: true,
-                global: true,
-                process: true,
-            },
+        topLevelAwait({
+            promiseExportName: '__tla',
+            promiseImportName: (i) => `__tla_${i}`,
         }),
+        nodePolyfills(),
         {
+            // libsodium-wrappers-sumo resolves its core via a bare relative
+            // import that Vite cannot find; point it at the ESM build.
             name: 'resolve-libsodium-sumo',
             resolveId(id, importer) {
                 if (id === './libsodium-sumo.mjs' && importer?.includes('libsodium-wrappers-sumo')) {
@@ -30,43 +28,27 @@ export default defineConfig({
         },
     ],
     define: {
-        'process.env': {},
         global: 'globalThis',
-    },
-    optimizeDeps: {
-        esbuildOptions: {
-            define: { global: 'globalThis' },
-        },
-        exclude: [
-            'libsodium-sumo',
-            'libsodium-wrappers-sumo',
-            'undici',
-            '@bokuweb/zstd-wasm',
-        ],
-    },
-    build: {
-        commonjsOptions: {
-            transformMixedEsModules: true,
-            ignore: ['util/types'],
-        },
-        target: 'esnext',
-        rollupOptions: {
-            external: [/^node:/],
-        },
+        'process.env': '{}',
     },
     resolve: {
-        mainFields: ['browser', 'module', 'main'],
-        conditions: ['browser', 'import', 'default'],
         alias: {
+            buffer: 'buffer',
+            process: 'process/browser',
+            // isomorphic-ws browser build only has a default export; the shim
+            // adds the named WebSocket export @midnight-ntwrk packages expect.
+            'isomorphic-ws': path.resolve(__dirname, 'src/shims/isomorphic-ws.js'),
             'libsodium-sumo': path.resolve(
                 process.cwd(),
                 'node_modules/libsodium-sumo/dist/modules-sumo-esm/libsodium-sumo.mjs'
             ),
-            'util': 'util/',
         },
     },
-    assetsInclude: ['**/*.wasm'],
-    server: {
-        fs: { allow: ['..'] },
+    optimizeDeps: {
+        include: ['buffer', 'process'],
+        exclude: ['libsodium-sumo', 'libsodium-wrappers-sumo'],
     },
-});
+    build: {
+        target: 'esnext',
+    },
+})

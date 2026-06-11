@@ -1,0 +1,57 @@
+/**
+ * In-memory private state provider for browser environments.
+ *
+ * State is NOT persisted across page reloads — suitable for demos and
+ * browser dApps where per-session state is sufficient.
+ */
+
+export const createInMemoryPrivateStateProvider = <
+  PSI extends string = string,
+  PS = unknown,
+>() => {
+  const record = new Map<PSI, PS>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const signingKeys: Record<string, any> = {};
+
+  const noop = () => Promise.resolve();
+
+  return {
+    setContractAddress(_address: string): void {
+      // no-op: in-memory provider doesn't scope by contract address
+    },
+    set(key: PSI, state: PS): Promise<void> {
+      record.set(key, state);
+      return Promise.resolve();
+    },
+    get(key: PSI): Promise<PS | null> {
+      return Promise.resolve(record.get(key) ?? null);
+    },
+    remove(key: PSI): Promise<void> {
+      record.delete(key);
+      return Promise.resolve();
+    },
+    clear(): Promise<void> {
+      record.clear();
+      return Promise.resolve();
+    },
+    setSigningKey(contractAddress: string, signingKey: unknown): Promise<void> {
+      signingKeys[contractAddress] = signingKey;
+      return Promise.resolve();
+    },
+    getSigningKey(contractAddress: string): Promise<unknown> {
+      return Promise.resolve(signingKeys[contractAddress] ?? null);
+    },
+    removeSigningKey(contractAddress: string): Promise<void> {
+      delete signingKeys[contractAddress];
+      return Promise.resolve();
+    },
+    clearSigningKeys(): Promise<void> {
+      Object.keys(signingKeys).forEach((k) => delete signingKeys[k]);
+      return Promise.resolve();
+    },
+    exportPrivateStates: noop as never,
+    importPrivateStates: noop as never,
+    exportSigningKeys: noop as never,
+    importSigningKeys: noop as never,
+  };
+};

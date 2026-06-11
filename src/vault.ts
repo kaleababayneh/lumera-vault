@@ -1,356 +1,243 @@
 /**
- * Vault Module — Document lifecycle management
+ * Vault Module — certificate document lifecycle + local indexes.
  *
- * Handles upload, storage, retrieval, and indexing of vault documents.
- * Documents are:
- *   • Encrypted with keys derived from the owner's wallet signature
- *   • Stored permanently on Lumera's Cascade decentralized storage
- *   • Indexed in localStorage per wallet address for fast access
+ * The certificate document (plaintext fields + salts + commitment) is
+ * encrypted client-side with a random XChaCha20-Poly1305 key and stored
+ * permanently on Lumera Cascade. The decryption key never touches the
+ * backend — it travels only inside the #cert/ share link the school hands
+ * to the student.
+ *
+ * Three localStorage indexes:
+ *   • issuer book     — certificates this browser issued (school role)
+ *   • student vault   — certificates imported from share links (student role)
+ *   • proof history   — verify links produced by this browser
  */
 
 import {
-    initCrypto,
-    generateDocumentKey,
     encryptBytes,
     decryptBytes,
-    deriveKeyFromSignature,
-    encryptKeyForOwner,
-    decryptKeyForOwner,
-    computeDocumentCommitment,
-    randomSalt,
-    randomId,
-    toBase64,
-    fromBase64,
+    generateDocumentKey,
 } from './crypto';
-import { signMessage, getConnectedAddress, isWalletConnected } from './wallet';
+import { uploadToCascade, downloadFromCascade } from './cascade';
+import type { CertificateFields } from './midnight/encoding';
 import {
-    uploadToCascade,
-    downloadFromCascade,
-    isCascadeReady,
-} from './cascade';
-import { type SchemaType } from './schemas';
-import { VAULT_INDEX_KEY_PREFIX } from './config';
+    bytesToB64u,
+    b64uToBytes,
+    type CertShareLinkPayload,
+} from './links';
+import {
+    ISSUED_INDEX_KEY,
+    STUDENT_VAULT_KEY,
+    PROOF_HISTORY_KEY,
+} from './config';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Cascade document format ──────────────────────────────────────────────────
 
-export interface VaultDocument {
-    /** Unique document ID (hex) */
-    documentId:         string;
-    /** Display title */
-    title:              string;
-    /** Document category */
-    schemaType:         SchemaType;
-    /** Document commitment (stored publicly with Cascade action) */
-    documentCommitment: string; // base64
-    /** Cascade action ID pointing to the encrypted document blob */
-    cascadeActionId:    string;
-    /** Encrypted document key (sealed with owner's derived key) */
-    encryptedKey:       string; // base64
-    /** Nonce for key decryption */
-    keyNonce:           string; // base64
-    /** Salt used to compute the document commitment (base64) */
-    commitmentSalt:     string; // base64
-    /** Owner wallet address */
-    owner:              string;
-    /** Upload timestamp (ms) */
-    uploadedAt:         number;
-    /** Approximate encrypted size in bytes */
-    sizeBytes:          number;
+/** Plaintext certificate document (this is what gets encrypted on Cascade). */
+export interface CertificateDocument {
+    v:               2;
+    type:            'lumera-vault/academic-credential';
+    title:           string;
+    fields:          CertificateFields;
+    /** base64url commitment salt (witness material). */
+    salt:            string;
+    /** base64url identity salt (preimage material for studentIdHash). */
+    idSalt:          string;
+    /** base64url commitment — must match the on-chain registration. */
+    commitment:      string;
+    contractAddress: string;
+    issuedAt:        number;
 }
 
-/** Lightweight index entry stored in localStorage */
-export interface VaultIndexEntry {
-    documentId:         string;
-    title:              string;
-    schemaType:         SchemaType;
-    documentCommitment: string;
-    cascadeActionId:    string;
-    encryptedKey:       string;
-    keyNonce:           string;
-    commitmentSalt:     string;
-    owner:              string;
-    uploadedAt:         number;
-    sizeBytes:          number;
+interface EncryptedEnvelope {
+    v:          2;
+    alg:        'xchacha20-poly1305';
+    nonce:      string;
+    ciphertext: string;
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const SIGN_KEY_MSG = 'Lumera Vault: Derive document encryption key v1';
-
-// ── Key management ────────────────────────────────────────────────────────────
-
-let _cachedDerivedKey: Uint8Array | null = null;
-let _keyDerivationPromise: Promise<Uint8Array> | null = null;
-
-/** Derive (or return cached) the wallet-based encryption key. */
-async function getDerivedKey(): Promise<Uint8Array> {
-    if (_cachedDerivedKey) return _cachedDerivedKey;
-    if (_keyDerivationPromise) return _keyDerivationPromise;
-
-    // Store in a local variable so the caller always holds a valid reference
-    // even after the `finally` block sets _keyDerivationPromise back to null.
-    const p: Promise<Uint8Array> = (async () => {
-        try {
-            const sig = await signMessage(SIGN_KEY_MSG);
-            const dk  = deriveKeyFromSignature(sig);
-            _cachedDerivedKey = dk;
-            return dk;
-        } catch (err) {
-            // Improve the error message for Keplr internal IDB / session errors
-            const msg = String(err);
-            if (
-                msg.includes('IDBDatabase') ||
-                msg.includes('InvalidStateError') ||
-                msg.includes('closing') ||
-                msg.includes('getActiveSessions')
-            ) {
-                throw new Error(
-                    'Keplr wallet encountered an internal error. ' +
-                    'Please reload the page, reconnect your wallet, and try again.'
-                );
-            }
-            throw err;
-        } finally {
-            // Always clear — success or failure — so future calls try fresh.
-            _keyDerivationPromise = null;
-        }
-    })();
-
-    _keyDerivationPromise = p;
-    return p;
+export interface PublishResult {
+    actionId:  string;
+    txHash:    string;
+    keyB64u:   string;
+    sizeBytes: number;
 }
 
-/** Clear the cached derived key (call on wallet disconnect). */
-export function clearDerivedKey(): void {
-    _cachedDerivedKey     = null;
-    _keyDerivationPromise = null;
+/** Encrypt the document with a fresh key and inscribe it on Cascade. */
+export async function publishCertificateDocument(
+    doc:         CertificateDocument,
+    onProgress?: (pct: number, label: string) => void,
+): Promise<PublishResult> {
+    onProgress?.(5, 'Encrypting certificate…');
+
+    const documentKey = generateDocumentKey();
+    const plaintext   = new TextEncoder().encode(JSON.stringify(doc));
+    const blob        = encryptBytes(plaintext, documentKey);
+
+    const envelope: EncryptedEnvelope = {
+        v: 2,
+        alg: 'xchacha20-poly1305',
+        nonce: blob.nonce,
+        ciphertext: blob.ciphertext,
+    };
+    const payloadBytes = new TextEncoder().encode(JSON.stringify(envelope));
+
+    const safeTitle = doc.title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    const upload = await uploadToCascade(
+        payloadBytes,
+        `lumera_vault_cert_${safeTitle}.json.enc`,
+        (pct, label) => onProgress?.(5 + Math.round(pct * 0.9), label),
+    );
+
+    onProgress?.(100, 'Stored on Cascade');
+    return {
+        actionId:  upload.actionId,
+        txHash:    upload.txHash,
+        keyB64u:   bytesToB64u(documentKey),
+        sizeBytes: upload.sizeBytes,
+    };
 }
 
-/**
- * Pre-warm the vault encryption key.
- * Call after wallet connect so Keplr's signing prompt appears at a natural
- * moment rather than mid-proof-generation.
- */
-export async function warmupVaultKey(): Promise<void> {
-    await getDerivedKey();
+/** Download + decrypt + validate a certificate document from Cascade. */
+export async function fetchCertificateDocument(
+    actionId:    string,
+    keyB64u:     string,
+    onProgress?: (pct: number, label: string) => void,
+): Promise<CertificateDocument> {
+    const bytes = await downloadFromCascade(actionId, (pct, label) =>
+        onProgress?.(Math.round(pct * 0.8), label),
+    );
+
+    onProgress?.(85, 'Decrypting…');
+
+    const envelope = JSON.parse(new TextDecoder().decode(bytes)) as EncryptedEnvelope;
+    if (envelope.alg !== 'xchacha20-poly1305') {
+        throw new Error('Unrecognized certificate envelope format');
+    }
+
+    const plaintext = decryptBytes(
+        { ciphertext: envelope.ciphertext, nonce: envelope.nonce, algorithm: envelope.alg },
+        b64uToBytes(keyB64u),
+    );
+    const doc = JSON.parse(new TextDecoder().decode(plaintext)) as CertificateDocument;
+    if (doc.type !== 'lumera-vault/academic-credential') {
+        throw new Error('Document is not a Lumera Vault academic credential');
+    }
+
+    onProgress?.(100, 'Certificate ready');
+    return doc;
 }
 
-// ── Vault index (localStorage) ────────────────────────────────────────────────
+// ── localStorage helpers ─────────────────────────────────────────────────────
 
-function indexKey(ownerAddress: string): string {
-    return `${VAULT_INDEX_KEY_PREFIX}${ownerAddress}`;
-}
-
-function loadIndex(ownerAddress: string): VaultIndexEntry[] {
+function loadList<T>(key: string): T[] {
     try {
-        const raw = localStorage.getItem(indexKey(ownerAddress));
-        return raw ? (JSON.parse(raw) as VaultIndexEntry[]) : [];
+        const raw = localStorage.getItem(key);
+        return raw ? (JSON.parse(raw) as T[]) : [];
     } catch {
         return [];
     }
 }
 
-function saveIndex(ownerAddress: string, entries: VaultIndexEntry[]): void {
-    localStorage.setItem(indexKey(ownerAddress), JSON.stringify(entries));
+function saveList<T>(key: string, list: T[]): void {
+    localStorage.setItem(key, JSON.stringify(list));
 }
 
-function appendToIndex(ownerAddress: string, entry: VaultIndexEntry): void {
-    const entries = loadIndex(ownerAddress);
-    entries.push(entry);
-    saveIndex(ownerAddress, entries);
-}
+// ── Issuer book (school role) ────────────────────────────────────────────────
 
-function removeFromIndex(ownerAddress: string, documentId: string): void {
-    const entries = loadIndex(ownerAddress).filter(e => e.documentId !== documentId);
-    saveIndex(ownerAddress, entries);
-}
-
-// ── Initialisation ────────────────────────────────────────────────────────────
-
-/** Must be called after wallet connect and Cascade initialisation. */
-export async function initVault(): Promise<void> {
-    await initCrypto();
-    if (!isWalletConnected()) throw new Error('Wallet must be connected.');
-}
-
-// ── Upload ────────────────────────────────────────────────────────────────────
-
-export interface UploadDocumentParams {
+export interface IssuedRecord {
     title:       string;
-    schemaType:  SchemaType;
-    fields:      Record<string, unknown>;
-    onProgress?: (pct: number, label: string) => void;
+    studentName: string;
+    actionId:    string;
+    commitment:  string; // base64url
+    shareLink:   string;
+    txHash:      string;
+    issuedAt:    number;
+    revoked:     boolean;
 }
 
-/**
- * Encrypt a document and upload it to Cascade permanent storage.
- * Returns the vault document metadata.
- */
-export async function uploadDocument(
-    p: UploadDocumentParams
-): Promise<VaultDocument> {
-    const owner = getConnectedAddress();
-    if (!owner) throw new Error('Wallet not connected.');
+export function listIssued(): IssuedRecord[] {
+    return loadList<IssuedRecord>(ISSUED_INDEX_KEY);
+}
 
-    p.onProgress?.(5, 'Requesting signing key…');
+export function recordIssued(entry: IssuedRecord): void {
+    const list = listIssued();
+    list.unshift(entry);
+    saveList(ISSUED_INDEX_KEY, list);
+}
 
-    // 1. Derive owner key (triggers wallet signing prompt once)
-    const ownerDerivedKey = await getDerivedKey();
+export function markIssuedRevoked(commitment: string): void {
+    const list = listIssued().map(e =>
+        e.commitment === commitment ? { ...e, revoked: true } : e,
+    );
+    saveList(ISSUED_INDEX_KEY, list);
+}
 
-    p.onProgress?.(15, 'Generating document encryption key…');
+// ── Student vault ────────────────────────────────────────────────────────────
 
-    // 2. Generate document-specific symmetric key
-    const documentKey = generateDocumentKey();
+export interface StudentCert {
+    title:      string;
+    actionId:   string;
+    keyB64u:    string;
+    doc:        CertificateDocument;
+    importedAt: number;
+}
 
-    // 3. Encrypt the fields JSON
-    const fieldsJson  = JSON.stringify(p.fields);
-    const fieldsBytes = new TextEncoder().encode(fieldsJson);
-    const encrypted   = encryptBytes(fieldsBytes, documentKey);
+export function listStudentCerts(): StudentCert[] {
+    return loadList<StudentCert>(STUDENT_VAULT_KEY);
+}
 
-    // 4. Seal the document key with the owner's derived key
-    const { encryptedKey, nonce: keyNonce } = encryptKeyForOwner(documentKey, ownerDerivedKey);
+export function getStudentCert(actionId: string): StudentCert | null {
+    return listStudentCerts().find(c => c.actionId === actionId) ?? null;
+}
 
-    p.onProgress?.(25, 'Computing document commitment…');
+export function removeStudentCert(actionId: string): void {
+    saveList(STUDENT_VAULT_KEY, listStudentCerts().filter(c => c.actionId !== actionId));
+}
 
-    // 5. Compute public commitment (stored alongside Cascade action)
-    const salt           = randomSalt();
-    const saltB64        = toBase64(salt);
-    const commitment     = computeDocumentCommitment(p.fields, owner, salt);
+/** Import a certificate from a #cert/ share link payload. */
+export async function importCertificateFromLink(
+    payload:     CertShareLinkPayload,
+    onProgress?: (pct: number, label: string) => void,
+): Promise<StudentCert> {
+    const existing = getStudentCert(payload.actionId);
+    if (existing) return existing;
 
-    // 6. Build the Cascade payload (encrypted JSON + commitment metadata)
-    const payload = {
-        version:            1,
-        schemaType:         p.schemaType,
-        commitment,
-        encryptedFields:    encrypted,
+    const doc = await fetchCertificateDocument(payload.actionId, payload.key, onProgress);
+
+    const cert: StudentCert = {
+        title:      doc.title || payload.title || 'Academic Certificate',
+        actionId:   payload.actionId,
+        keyB64u:    payload.key,
+        doc,
+        importedAt: Date.now(),
     };
-    const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
-
-    p.onProgress?.(35, 'Uploading to Cascade…');
-
-    // 7. Upload to Cascade
-    let cascadeActionId: string;
-
-    if (isCascadeReady()) {
-        const safeTitle    = p.title.replace(/[^a-zA-Z0-9_-]/g, '_');
-        cascadeActionId    = await uploadToCascade(
-            payloadBytes,
-            `vault_${p.schemaType}_${safeTitle}.enc`,
-            false, // private
-            pct => p.onProgress?.(35 + Math.round(pct * 0.55), 'Uploading to Cascade…')
-        );
-    } else {
-        // Fallback: store in localStorage (no Cascade available in offline mode)
-        const documentId = randomId();
-        cascadeActionId  = `local_${documentId}`;
-        localStorage.setItem(
-            `lumera_vault_blob_${cascadeActionId}`,
-            toBase64(payloadBytes)
-        );
-        console.warn('Cascade unavailable — stored locally. Connect wallet to upload to permanent storage.');
-    }
-
-    p.onProgress?.(92, 'Indexing document…');
-
-    // 8. Build and persist index entry
-    const documentId = randomId();
-    const entry: VaultIndexEntry = {
-        documentId,
-        title:              p.title,
-        schemaType:         p.schemaType,
-        documentCommitment: commitment,
-        cascadeActionId,
-        encryptedKey,
-        keyNonce,
-        commitmentSalt:     saltB64,
-        owner,
-        uploadedAt:         Date.now(),
-        sizeBytes:          payloadBytes.length,
-    };
-
-    appendToIndex(owner, entry);
-
-    p.onProgress?.(100, 'Done');
-
-    return { ...entry };
+    const list = listStudentCerts();
+    list.unshift(cert);
+    saveList(STUDENT_VAULT_KEY, list);
+    return cert;
 }
 
-// ── List ──────────────────────────────────────────────────────────────────────
+// ── Proof history ────────────────────────────────────────────────────────────
 
-/** Return all documents in the vault for the connected wallet. */
-export function listDocuments(): VaultDocument[] {
-    const owner = getConnectedAddress();
-    if (!owner) return [];
-    return loadIndex(owner).map(e => ({ ...e }));
+export interface ProofHistoryEntry {
+    description: string;
+    certTitle:   string;
+    link:        string;
+    txHash:      string;
+    when:        number;
 }
 
-/** Get a single document by ID. */
-export function getDocument(documentId: string): VaultDocument | null {
-    const owner = getConnectedAddress();
-    if (!owner) return null;
-    return loadIndex(owner).find(e => e.documentId === documentId) ?? null;
+export function listProofHistory(): ProofHistoryEntry[] {
+    return loadList<ProofHistoryEntry>(PROOF_HISTORY_KEY);
 }
 
-// ── Download & decrypt ────────────────────────────────────────────────────────
-
-/**
- * Download and decrypt the plaintext fields for a vault document.
- * Requires wallet to derive the decryption key.
- */
-export async function decryptDocumentFields(
-    doc:         VaultDocument,
-    onProgress?: (pct: number, label: string) => void
-): Promise<Record<string, unknown>> {
-    onProgress?.(5, 'Requesting decryption key…');
-
-    const ownerDerivedKey = await getDerivedKey();
-
-    onProgress?.(20, 'Decrypting document key…');
-
-    // 1. Recover document key
-    const documentKey = decryptKeyForOwner(doc.encryptedKey, doc.keyNonce, ownerDerivedKey);
-
-    // 2. Download encrypted payload
-    let payloadBytes: Uint8Array;
-
-    if (doc.cascadeActionId.startsWith('local_')) {
-        const b64 = localStorage.getItem(`lumera_vault_blob_${doc.cascadeActionId}`);
-        if (!b64) throw new Error('Local document blob not found.');
-        payloadBytes = fromBase64(b64);
-    } else {
-        onProgress?.(30, 'Downloading from Cascade…');
-        payloadBytes = await downloadFromCascade(
-            doc.cascadeActionId,
-            pct => onProgress?.(30 + Math.round(pct * 0.5), 'Downloading…')
-        );
-    }
-
-    onProgress?.(82, 'Decrypting fields…');
-
-    // 3. Parse payload
-    const payloadJson = new TextDecoder().decode(payloadBytes);
-    const payload     = JSON.parse(payloadJson) as {
-        encryptedFields: { ciphertext: string; nonce: string; algorithm: 'xchacha20-poly1305' };
-    };
-
-    // 4. Decrypt fields
-    const fieldsBytes = decryptBytes(payload.encryptedFields, documentKey);
-    const fieldsJson  = new TextDecoder().decode(fieldsBytes);
-
-    onProgress?.(100, 'Done');
-
-    return JSON.parse(fieldsJson) as Record<string, unknown>;
+export function addProofHistory(entry: ProofHistoryEntry): void {
+    const list = listProofHistory();
+    list.unshift(entry);
+    saveList(PROOF_HISTORY_KEY, list);
 }
 
-// ── Delete ────────────────────────────────────────────────────────────────────
-
-/**
- * Remove a document from the vault index.
- * Note: the Cascade entry is permanent and cannot be deleted
- * (this is by design — immutability is a feature).
- */
-export function deleteDocument(documentId: string): void {
-    const owner = getConnectedAddress();
-    if (!owner) return;
-    removeFromIndex(owner, documentId);
+export function removeProofHistory(txHash: string): void {
+    saveList(PROOF_HISTORY_KEY, listProofHistory().filter(e => e.txHash !== txHash));
 }
