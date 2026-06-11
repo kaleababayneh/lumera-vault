@@ -17,9 +17,10 @@ export const CASCADE_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 // ── Midnight ─────────────────────────────────────────────────────────────────
 export const MIDNIGHT_NETWORK_ID = env.VITE_MIDNIGHT_NETWORK_ID ?? 'preprod';
-/** Used by the wallet-less verifier tab; the wallet's getConfiguration() wins otherwise. */
-export const INDEXER_URI    = env.VITE_INDEXER_URI    ?? 'https://indexer.preprod.midnight.network/api/v1/graphql';
-export const INDEXER_WS_URI = env.VITE_INDEXER_WS_URI ?? 'wss://indexer.preprod.midnight.network/api/v1/graphql/ws';
+/** Used by the wallet-less verifier tab; the wallet's getConfiguration() wins otherwise.
+ *  NOTE: the preprod indexer moved to /api/v4 — the old /api/v1 path 308s into a 404. */
+export const INDEXER_URI    = env.VITE_INDEXER_URI    ?? 'https://indexer.preprod.midnight.network/api/v4/graphql';
+export const INDEXER_WS_URI = env.VITE_INDEXER_WS_URI ?? 'wss://indexer.preprod.midnight.network/api/v4/graphql/ws';
 /** Default registry contract address (can be overridden in the Registry tab). */
 export const DEFAULT_CONTRACT_ADDRESS = env.VITE_CONTRACT_ADDRESS ?? '';
 

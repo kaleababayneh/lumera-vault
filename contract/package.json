@@ -24,7 +24,7 @@
     "@midnight-ntwrk/compact-runtime": "^0.16.0"
   },
   "devDependencies": {
-    "@midnight-ntwrk/midnight-js-network-id": "^4.0.4",
+    "@midnight-ntwrk/midnight-js-network-id": "4.1.1",
     "typescript": "~5.9.3",
     "vitest": "^4.1.4"
   }

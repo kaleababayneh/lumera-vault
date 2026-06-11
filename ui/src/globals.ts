@@ -11,4 +11,4 @@ globalThis.process = {
 };
 
 // midnight-js serialization paths expect a global Buffer.
-globalThis.Buffer = Buffer;
+(globalThis as { Buffer?: typeof Buffer }).Buffer = Buffer;

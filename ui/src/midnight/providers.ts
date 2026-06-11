@@ -25,6 +25,15 @@ import { fromHex, toHex } from '@midnight-ntwrk/midnight-js-utils';
 import { createInMemoryPrivateStateProvider } from './in-memory-private-state';
 import type { CertCircuitKeys, CertProviders } from './common-types';
 
+/**
+ * The exact hex the wallet returned from balancing, keyed by the deserialized
+ * transaction object. Submitting these bytes VERBATIM matters: re-serializing
+ * through our ledger-v8 can re-encode the wallet's dust spend proof and the
+ * node then rejects with "1010 Custom error 170" (InvalidDustSpendProof) when
+ * the wallet's fee stack is on a different ledger line.
+ */
+const balancedTxHex = new WeakMap<object, string>();
+
 export async function buildProviders(api: ConnectedAPI): Promise<CertProviders> {
     const config = await api.getConfiguration();
     const shieldedAddresses = await api.getShieldedAddresses();
@@ -54,18 +63,22 @@ export async function buildProviders(api: ConnectedAPI): Promise<CertProviders> 
         },
         async balanceTx(tx: UnboundTransaction, _ttl?: Date): Promise<FinalizedTransaction> {
             const { tx: balanced } = await api.balanceUnsealedTransaction(toHex(tx.serialize()));
-            return Transaction.deserialize<SignatureEnabled, Proof, Binding>(
+            const finalized = Transaction.deserialize<SignatureEnabled, Proof, Binding>(
                 'signature',
                 'proof',
                 'binding',
                 fromHex(balanced),
             );
+            balancedTxHex.set(finalized as unknown as object, balanced);
+            return finalized;
         },
     };
 
     const midnightProvider: CertProviders['midnightProvider'] = {
         async submitTx(tx: FinalizedTransaction): Promise<string> {
-            await api.submitTransaction(toHex(tx.serialize()));
+            // Prefer the wallet's own balanced bytes over a re-serialization.
+            const exact = balancedTxHex.get(tx as unknown as object);
+            await api.submitTransaction(exact ?? toHex(tx.serialize()));
             return tx.identifiers()[0];
         },
     };
