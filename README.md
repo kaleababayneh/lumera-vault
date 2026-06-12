@@ -5,10 +5,10 @@
 A school issues an academic certificate; the encrypted document lives **permanently on
 [Lumera Cascade](https://lumera.io)**, its commitment hash + Cascade pointer are anchored
 on **[Midnight](https://midnight.network) (preprod)**, and the student later proves
-selective claims about it with **real ZK circuits** — without revealing the certificate.
+selective claims about it without revealing the certificate.
 
-No simulation: Compact contract compiled & deployed on Midnight preprod, real proofs via
-the [1AM wallet](https://1am.xyz)'s ProofStation (gasless — fees sponsored), and real
+Compact contract compiled & deployed on Midnight preprod, proofs via either
+the [1AM wallet](https://1am.xyz)'s ProofStation or local proof server, and 
 permanent storage through [cascade-api](https://github.com/kaleababayneh/cascade-api)
 (no Keplr / Lumera wallet needed in the browser).
 
