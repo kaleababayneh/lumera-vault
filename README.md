@@ -127,25 +127,6 @@ NOT recompile the contract. Re-run `npm run build:contract` only when a
 - **Identity disclosure is student-controlled:** the verify link optionally carries
   (name, id, idSalt); the verifier recomputes the salted hash and matches it against the
   on-chain record. Omit it for anonymous proofs.
-- Future work: a MerkleTree-based membership proof would also hide *which* certificate a
-  proof refers to.
-
-## Notes & credits
-
-- Proof flow modeled on **[vaxzk](https://github.com/bochaco/vaxzk)** (MIT) — vaccination
-  certificates on Midnight; `src/midnight/in-memory-private-state.ts` and the simulator
-  test harness are adapted from it.
-- 1AM integration per the official AI reference: <https://1am.xyz/ai.txt> (dust-free:
-  ProofStation proves, balances and sponsors fees — users pay 0).
-- Storage via **cascade-api**'s public instance at `https://api.lumera.help`
-  (`VITE_CASCADE_API_BASE` to self-host). API keys are quota-capped bearer tokens; a
-  browser-exposed key is the documented pattern for demos — rotate if abused.
-- After any `.compact` or witness change run `npm run build:contract`
-  (regenerates `contract/src/managed/` + `contract/dist/`); the next
-  `npm run build:start` re-copies `ui/public/keys|zkir` automatically
-  (compact compiler ≥ 0.31, language ≥ 0.20).
-- Wallet detection enumerates every `window.midnight` connector with API v4
-  (1AM preferred, Lace works too) — pattern borrowed from the kaamos htlc-ui.
 
 ## License
 
