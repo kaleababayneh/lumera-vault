@@ -1,7 +1,5 @@
 # Lumera Vault 🎓
 
-> **Issue once, prove forever.**
-
 A school issues an academic certificate; the encrypted document lives **permanently on
 [Lumera Cascade](https://lumera.io)**, its commitment hash + Cascade pointer are anchored
 on **[Midnight](https://midnight.network) (preprod)**, and the student later proves
