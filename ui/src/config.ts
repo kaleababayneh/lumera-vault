@@ -3,7 +3,7 @@
  *
  * Storage: Lumera Cascade via the cascade-api HTTP service (no Lumera wallet
  * needed — the backend signs and pays in ulume).
- * Proofs:  Midnight preprod via the 1AM wallet (fees sponsored by ProofStation).
+ * Proofs:  Midnight preprod via the 1AM wallet 
  */
 
 const env = import.meta.env as Record<string, string | undefined>;

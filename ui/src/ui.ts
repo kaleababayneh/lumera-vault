@@ -5,7 +5,7 @@
  *       | Verify (anyone, wallet-less) | History
  *
  * Storage: Lumera Cascade via cascade-api (no Lumera wallet needed).
- * Chain:   Midnight preprod via the 1AM wallet (fees sponsored — gasless).
+ * Chain:   Midnight preprod via the 1AM wallet or local proof server.
  */
 
 import {
@@ -195,7 +195,7 @@ async function handleWalletClick(): Promise<void> {
     try {
         await connectWallet();
         await afterWalletConnected();
-        showStatus(`Connected to ${getWalletName() ?? 'wallet'} on Midnight ${MIDNIGHT_NETWORK_ID} — fees sponsored ⚡`, 'success');
+        showStatus(`Connected to ${getWalletName() ?? 'wallet'} on Midnight ${MIDNIGHT_NETWORK_ID}`, 'success');
     } catch (err) {
         btn.disabled = false;
         btn.textContent = 'Connect 1AM Wallet';
@@ -813,8 +813,8 @@ function renderProofInProgress(): void {
             <p id="proof-gen-label" class="proof-gen-label">Running the Compact circuit…</p>
             <div class="midnight-steps">
                 <div class="mid-step" id="mid-step-1">⏳ Loading certificate witness</div>
-                <div class="mid-step" id="mid-step-2">⏳ Generating ZK proof (ProofStation, ~2–5s)</div>
-                <div class="mid-step" id="mid-step-3">⏳ Balancing transaction (fees sponsored)</div>
+                <div class="mid-step" id="mid-step-2">⏳ Generating ZK proof (~2–5s)</div>
+                <div class="mid-step" id="mid-step-3">⏳ Balancing transaction</div>
                 <div class="mid-step" id="mid-step-4">⏳ Submitting to Midnight preprod</div>
             </div>
         </div>`;
@@ -839,7 +839,6 @@ function renderProofResult(description: string, txHash: string, link: string, id
                 <div class="proof-detail"><span class="proof-detail-label">Midnight Tx</span><span class="mono truncate" title="${escAttr(txHash)}">${escHtml(txHash.slice(0, 24))}…</span></div>
                 <div class="proof-detail"><span class="proof-detail-label">Network</span><span>Midnight ${escHtml(MIDNIGHT_NETWORK_ID)}</span></div>
                 <div class="proof-detail"><span class="proof-detail-label">Identity</span><span>${identityDisclosed ? 'Disclosed to verifier' : 'Not disclosed'}</span></div>
-                <div class="proof-detail"><span class="proof-detail-label">Cost</span><span>0 — sponsored by ProofStation ⚡</span></div>
             </div>
             <div class="proof-share-section">
                 <p class="share-label">Share this link with the verifier:</p>

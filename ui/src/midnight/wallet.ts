@@ -4,8 +4,7 @@
  * Detection follows the kaamos BrowserHtlcManager pattern: enumerate every
  * wallet injected under window.midnight and pick one whose apiVersion is
  * 4.x — 1AM is preferred when present, but Lace or any other v4 connector
- * works too. Fees are sponsored by the wallet side (1AM ProofStation), so
- * users never need dust.
+ * works too.
  */
 
 import '@midnight-ntwrk/dapp-connector-api'; // pulls in the global Window.midnight typing
