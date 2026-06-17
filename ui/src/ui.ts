@@ -60,6 +60,7 @@ import { cascadeHealth, isCascadeConfigured } from './cascade';
 import { initCrypto, toHex } from './crypto';
 import { CERT_FORM_FIELDS, CLAIMS, CLAIM_KEYS, type FieldDef } from './schemas';
 import {
+    ROLE_KEY,
     CONTRACT_ADDRESS_KEY,
     DEFAULT_CONTRACT_ADDRESS,
     MIDNIGHT_NETWORK_ID,
@@ -74,6 +75,58 @@ let registry:  CertificateRegistry | null = null;
 
 let proveCertActionId: string | null = null;
 let proveClaimKey:     ClaimKey | null = null;
+
+// ── Role (persona) ──────────────────────────────────────────────────────────
+// One person = one role at a time. The role decides which tabs are visible so
+// the school (issuer) and student (holder) experiences never show at once.
+
+type Role = 'school' | 'student' | 'verifier';
+
+const ROLE_TABS: Record<Role, string[]> = {
+    school:   ['issue'],
+    student:  ['certs', 'prove', 'history'],
+    verifier: ['verify'],
+};
+
+const ROLE_LABEL: Record<Role, string> = {
+    school:   '🏫 School',
+    student:  '🎓 Student',
+    verifier: '✅ Verifier',
+};
+
+function getRole(): Role | null {
+    const r = localStorage.getItem(ROLE_KEY);
+    return r === 'school' || r === 'student' || r === 'verifier' ? r : null;
+}
+
+/** Show the landing role picker; hide all tabs and tab content. */
+function showRolePicker(): void {
+    q('#role-picker').classList.remove('hidden');
+    q('#tab-nav').classList.add('hidden');
+    q('#role-switch').classList.add('hidden');
+    qa('.tab-content').forEach(el => el.classList.remove('active'));
+}
+
+/** Commit a role: persist it, reveal only its tabs, and open the first one. */
+function applyRole(role: Role, opts?: { tab?: string }): void {
+    localStorage.setItem(ROLE_KEY, role);
+
+    q('#role-picker').classList.add('hidden');
+    q('#tab-nav').classList.remove('hidden');
+
+    const allowed = ROLE_TABS[role];
+    qa('.tab-button').forEach(btn => {
+        const tab = (btn as HTMLElement).dataset.tab!;
+        (btn as HTMLElement).classList.toggle('hidden', !allowed.includes(tab));
+    });
+
+    const chip = q<HTMLButtonElement>('#role-switch');
+    chip.classList.remove('hidden');
+    q('#role-label').textContent = ROLE_LABEL[role];
+
+    const tab = opts?.tab && allowed.includes(opts.tab) ? opts.tab : allowed[0];
+    switchTab(tab);
+}
 
 // ── Contract address ──────────────────────────────────────────────────────────
 
@@ -130,6 +183,12 @@ export async function initUI(): Promise<void> {
     q('#save-contract-address').addEventListener('click', handleSaveContractAddress);
     q('#deploy-registry-button').addEventListener('click', () => void handleDeployRegistry());
 
+    // Role picker
+    q('#role-grid').querySelectorAll<HTMLButtonElement>('[data-role]').forEach(btn => {
+        btn.addEventListener('click', () => applyRole(btn.dataset.role as Role));
+    });
+    q('#role-switch').addEventListener('click', showRolePicker);
+
     renderAll();
 
     // All listeners wired and first paint done — the boot watchdog stands down.
@@ -146,12 +205,15 @@ export async function initUI(): Promise<void> {
         })
         .catch(() => { /* user can connect manually */ });
 
-    // Handle share links in the URL.
+    // A share link decides the recipient's role automatically; otherwise fall
+    // back to the saved role, or show the picker on a first visit.
+    let routedByLink = false;
     const pending = sessionStorage.getItem('lv_pending_fragment');
     if (pending) {
         sessionStorage.removeItem('lv_pending_fragment');
         try {
             await handleIncomingFragment(JSON.parse(pending) as ParsedFragment);
+            routedByLink = true;
         } catch (err) {
             showStatus(`Could not handle the shared link: ${String(err)}`, 'error');
         }
@@ -160,17 +222,24 @@ export async function initUI(): Promise<void> {
         if (frag) {
             window.history.replaceState({}, document.title, window.location.pathname);
             await handleIncomingFragment(frag);
+            routedByLink = true;
         }
+    }
+
+    if (!routedByLink) {
+        const role = getRole();
+        if (role) applyRole(role);
+        else showRolePicker();
     }
 }
 
 async function handleIncomingFragment(frag: ParsedFragment): Promise<void> {
     if (frag.kind === 'cert') {
-        switchTab('certs');
+        applyRole('student', { tab: 'certs' });
         q<HTMLTextAreaElement>('#import-input').value = buildCertShareLink(frag.payload);
         await runImport(frag.payload);
     } else {
-        switchTab('verify');
+        applyRole('verifier', { tab: 'verify' });
         q<HTMLTextAreaElement>('#verify-input').value = buildVerifyLink(frag.payload);
         await runVerify(frag.payload);
     }

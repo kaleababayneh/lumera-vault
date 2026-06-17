@@ -29,6 +29,7 @@ export const DEGREE_LEVELS = ['Certificate', 'Associate', 'Bachelor', 'Master', 
 export type DegreeLevel = (typeof DEGREE_LEVELS)[number];
 
 // ── localStorage / sessionStorage keys ──────────────────────────────────────
+export const ROLE_KEY             = 'lumera_vault_role_v2';
 export const CONTRACT_ADDRESS_KEY = 'lumera_vault_contract_address_v2';
 export const ISSUED_INDEX_KEY     = 'lumera_vault_issued_certs_v2';
 export const STUDENT_VAULT_KEY    = 'lumera_vault_student_certs_v2';

@@ -54,6 +54,7 @@
     <div class="header-badges">
       <span class="tech-badge midnight">🌙 Midnight · preprod</span>
       <span class="tech-badge cascade">⛓ Lumera Cascade</span>
+      <button id="role-switch" class="btn-ghost btn-sm hidden" title="Switch role">⇄ <span id="role-label"></span></button>
       <button id="open-settings" class="btn-ghost btn-sm" title="Registry settings">⚙️</button>
     </div>
   </header>
@@ -69,8 +70,35 @@
   <!-- ─── Status ─────────────────────────────────────────────────────────── -->
   <div id="status-message" class="status-message hidden"></div>
 
-  <!-- ─── Tab nav ────────────────────────────────────────────────────────── -->
-  <nav class="tab-nav" id="tab-nav">
+  <!-- ─── Role picker (landing) ──────────────────────────────────────────── -->
+  <section id="role-picker" class="section hidden">
+    <div class="section-header">
+      <div>
+        <h2>Welcome to Lumera Vault</h2>
+        <p class="section-description">Choose how you'll use the app. You can switch anytime from the top bar.</p>
+      </div>
+    </div>
+    <div class="schema-grid" id="role-grid">
+      <button class="schema-card" data-role="school">
+        <span class="schema-card-icon">🏫</span>
+        <span class="schema-card-label">School</span>
+        <span class="schema-card-desc">Issue certificates to students and anchor them on Midnight.</span>
+      </button>
+      <button class="schema-card" data-role="student">
+        <span class="schema-card-icon">🎓</span>
+        <span class="schema-card-label">Student</span>
+        <span class="schema-card-desc">Import your certificate and prove claims about it.</span>
+      </button>
+      <button class="schema-card" data-role="verifier">
+        <span class="schema-card-icon">✅</span>
+        <span class="schema-card-label">Verifier</span>
+        <span class="schema-card-desc">Check a shared proof on-chain — no wallet needed.</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ─── Tab nav (revealed once a role is picked) ───────────────────────── -->
+  <nav class="tab-nav hidden" id="tab-nav">
     <button class="tab-button active" data-tab="issue">🏫 Issue</button>
     <button class="tab-button" data-tab="certs">🎓 My Certificates</button>
     <button class="tab-button" data-tab="prove">🔐 Prove</button>
@@ -81,7 +109,7 @@
   <!-- ═══════════════════════════════════════════════════════════════════════
        ISSUE TAB (school)
        ══════════════════════════════════════════════════════════════════════ -->
-  <section id="tab-issue" class="tab-content active">
+  <section id="tab-issue" class="tab-content">
     <div class="section">
       <div class="section-header">
         <div>
