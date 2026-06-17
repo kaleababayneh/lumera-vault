@@ -1,6 +1,5 @@
 /**
- * Testbed for exercising the certificate registry circuits without a live
- * network — modeled on vaxzk's simulator (MIT, github.com/bochaco/vaxzk).
+ * Testbed for exercising the certificate registry circuits without a live network
  * Each method wraps an impure circuit call and keeps the CircuitContext in
  * sync, exactly as the on-chain transcript would evolve.
  */

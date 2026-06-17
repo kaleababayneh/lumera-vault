@@ -1,10 +1,7 @@
 /**
  * Midnight wallet connector (dApp connector API v4).
  *
- * Detection follows the kaamos BrowserHtlcManager pattern: enumerate every
- * wallet injected under window.midnight and pick one whose apiVersion is
- * 4.x — 1AM is preferred when present, but Lace or any other v4 connector
- * works too.
+ * Detects every wallet injected under window.midnight and pick one whose apiVersion is 4.x — 1AM is preferred when present, but Lace or any other v4 connector works too.
  */
 
 import '@midnight-ntwrk/dapp-connector-api'; // pulls in the global Window.midnight typing

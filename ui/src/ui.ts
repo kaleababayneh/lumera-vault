@@ -180,6 +180,10 @@ export async function initUI(): Promise<void> {
     q('#open-settings').addEventListener('click', openSettings);
     q('#close-settings').addEventListener('click', closeSettings);
     q('#settings-overlay').addEventListener('click', closeSettings);
+
+    // Certificate viewer modal
+    q('#close-cert-view').addEventListener('click', closeCertView);
+    q('#cert-view-overlay').addEventListener('click', closeCertView);
     q('#save-contract-address').addEventListener('click', handleSaveContractAddress);
     q('#deploy-registry-button').addEventListener('click', () => void handleDeployRegistry());
 
@@ -646,6 +650,7 @@ function renderStudentCerts(): void {
             </div>
             <div class="doc-card-actions">
                 <button class="btn-primary btn-sm" data-action="prove-cert" data-id="${escAttr(c.actionId)}">🔐 Prove a Claim</button>
+                <button class="btn-ghost btn-sm" data-action="view-cert" data-id="${escAttr(c.actionId)}">👁 View Certificate</button>
                 <button class="btn-ghost btn-sm" data-action="copy-cert-link" data-id="${escAttr(c.actionId)}">Copy Link</button>
                 <button class="btn-ghost btn-sm" data-action="remove-cert" data-id="${escAttr(c.actionId)}">🗑 Remove</button>
             </div>
@@ -677,6 +682,9 @@ function renderStudentCerts(): void {
             removeStudentCert(btn.dataset.id!);
             renderStudentCerts();
         });
+    });
+    container.querySelectorAll<HTMLButtonElement>('[data-action="view-cert"]').forEach(btn => {
+        btn.addEventListener('click', () => openCertView(btn.dataset.id!));
     });
 }
 
@@ -1038,6 +1046,44 @@ function openSettings(): void {
 function closeSettings(): void {
     q('#settings-modal').classList.add('hidden');
     q('#settings-overlay').classList.add('hidden');
+}
+
+// ── CERTIFICATE VIEWER MODAL ──────────────────────────────────────────────────
+
+function openCertView(actionId: string): void {
+    const cert = getStudentCert(actionId);
+    if (!cert) return;
+    const f = cert.doc.fields;
+    q('#cert-view-body').innerHTML = `
+        <div class="cert-view-hero">
+            <div class="cert-view-icon">🎓</div>
+            <div class="cert-view-degree">${escHtml(f.degreeType)} in ${escHtml(f.fieldOfStudy)}</div>
+            <div class="cert-view-name">${escHtml(f.studentName)}</div>
+            <div class="cert-view-inst">${escHtml(f.institution)} · ${escHtml(String(f.graduationYear))}</div>
+            ${f.accredited ? '<span class="badge badge-success">✓ Accredited institution</span>' : ''}
+        </div>
+        <div class="cert-view-grid">
+            <div class="doc-detail"><span class="doc-detail-label">Student name</span><span>${escHtml(f.studentName)}</span></div>
+            <div class="doc-detail"><span class="doc-detail-label">Student ID</span><span>${escHtml(f.studentId)}</span></div>
+            <div class="doc-detail"><span class="doc-detail-label">Institution</span><span>${escHtml(f.institution)}</span></div>
+            <div class="doc-detail"><span class="doc-detail-label">Degree</span><span>${escHtml(f.degreeType)}</span></div>
+            <div class="doc-detail"><span class="doc-detail-label">Field of study</span><span>${escHtml(f.fieldOfStudy)}</span></div>
+            <div class="doc-detail"><span class="doc-detail-label">Graduation year</span><span>${escHtml(String(f.graduationYear))}</span></div>
+            ${f.gpa != null ? `<div class="doc-detail"><span class="doc-detail-label">GPA</span><span>${escHtml(f.gpa.toFixed(2))} / 4.00</span></div>` : ''}
+            <div class="doc-detail"><span class="doc-detail-label">Accredited</span><span>${f.accredited ? 'Yes' : 'No'}</span></div>
+            <div class="doc-detail"><span class="doc-detail-label">Issued</span><span>${new Date(cert.doc.issuedAt).toLocaleString()}</span></div>
+            <div class="doc-detail"><span class="doc-detail-label">Cascade action</span><span>#${escHtml(cert.actionId)}</span></div>
+            <div class="doc-detail doc-detail-mono"><span class="doc-detail-label">Commitment</span><span class="mono cert-view-mono" title="${escAttr(cert.doc.commitment)}">${escHtml(cert.doc.commitment)}</span></div>
+            <div class="doc-detail doc-detail-mono"><span class="doc-detail-label">Registry</span><span class="mono cert-view-mono" title="${escAttr(cert.doc.contractAddress)}">${escHtml(cert.doc.contractAddress)}</span></div>
+        </div>
+        <p class="cert-view-foot">🔒 Decrypted locally from Lumera Cascade — the full credential your school issued. No wallet needed to view.</p>`;
+    q('#cert-view-modal').classList.remove('hidden');
+    q('#cert-view-overlay').classList.remove('hidden');
+}
+
+function closeCertView(): void {
+    q('#cert-view-modal').classList.add('hidden');
+    q('#cert-view-overlay').classList.add('hidden');
 }
 
 function handleSaveContractAddress(): void {

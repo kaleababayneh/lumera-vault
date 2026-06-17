@@ -1,6 +1,5 @@
 /**
  * Shared types for the certificate registry midnight-js integration.
- * Modeled on the vaxzk contract-api layer (MIT, github.com/bochaco/vaxzk).
  */
 
 import type { MidnightProviders } from '@midnight-ntwrk/midnight-js-types';

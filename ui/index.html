@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lumera Vault — Issue once, prove forever</title>
+  <title>Lumera Vault | Issue once, prove forever</title>
   <meta name="description" content="Academic certificates stored permanently on Lumera Cascade, anchored on Midnight, proven with real zero-knowledge circuits via the 1AM wallet." />
 
   <!-- Fonts -->
@@ -273,6 +273,17 @@
 </div><!-- /.app -->
 
 <!-- ─── Settings Modal ──────────────────────────────────────────────────── -->
+<div id="cert-view-overlay" class="modal-overlay hidden"></div>
+<div id="cert-view-modal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>🎓 Certificate</h3>
+      <button id="close-cert-view" class="btn-close" aria-label="Close">✕</button>
+    </div>
+    <div id="cert-view-body"></div>
+  </div>
+</div>
+
 <div id="settings-overlay" class="modal-overlay hidden"></div>
 <div id="settings-modal" class="modal hidden">
   <div class="modal-content">

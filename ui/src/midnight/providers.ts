@@ -1,6 +1,5 @@
 /**
  * midnight-js providers built from a connected wallet (dApp connector v4),
- * following the kaamos BrowserHtlcManager pattern:
  *
  *   - proving is delegated to the wallet (1AM → ProofStation) via
  *     getProvingProvider(zkConfigProvider.asKeyMaterialProvider())

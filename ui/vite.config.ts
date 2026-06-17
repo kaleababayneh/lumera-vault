@@ -1,5 +1,4 @@
 // Vite configuration for the midnight-js browser stack, ported from the
-// kaamos htlc-ui config (Apache-2.0, midnightntwrk/example-counter lineage):
 // wasm chunking for onchain-runtime, node polyfills with Buffer/process
 // globals, and top-level-await support — plus this app's libsodium-sumo and
 // isomorphic-ws fixes.
