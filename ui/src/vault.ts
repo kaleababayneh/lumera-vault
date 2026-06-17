@@ -85,7 +85,7 @@ export async function publishCertificateDocument(
     const safeTitle = doc.title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
     const upload = await uploadToCascade(
         payloadBytes,
-        `lumera_vault_cert_${safeTitle}.json.enc`,
+        `lumera_vault_cert_${safeTitle}.json`,
         (pct, label) => onProgress?.(5 + Math.round(pct * 0.9), label),
     );
 
