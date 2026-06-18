@@ -15,3 +15,6 @@ ui/public/zkir/
 
 # reference clones
 .refs/
+
+# Vercel
+.vercel
